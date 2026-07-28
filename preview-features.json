@@ -20,6 +20,12 @@
       "platforms": ["desktop"]
     },
     {
+      "id": "radar",
+      "name": "Radar",
+      "description": "Status, sources, and finds from the AI Radar collector",
+      "platforms": ["desktop"]
+    },
+    {
       "id": "forum",
       "name": "Forum Channels",
       "description": "Forum-style threaded channels for long-form discussions",

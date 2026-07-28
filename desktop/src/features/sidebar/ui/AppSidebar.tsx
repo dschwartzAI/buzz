@@ -105,7 +105,8 @@ type AppSidebarProps = {
     | "agents"
     | "workflows"
     | "pulse"
-    | "projects";
+    | "projects"
+    | "radar";
   unreadChannelCounts: ReadonlyMap<string, number>;
   unreadChannelIds: ReadonlySet<string>;
   communities: Community[];
@@ -145,6 +146,7 @@ type AppSidebarProps = {
   onSelectAgents: () => void;
   onSelectProjects: () => void;
   onSelectPulse: () => void;
+  onSelectRadar: () => void;
   onSelectWorkflows: () => void;
   onSelectHome: () => void;
   onSelectChannel: (channelId: string) => void;
@@ -214,6 +216,7 @@ export function AppSidebar({
   onSelectAgents,
   onSelectProjects,
   onSelectPulse,
+  onSelectRadar,
   onSelectWorkflows,
   onSelectHome,
   onSelectChannel,
@@ -612,6 +615,7 @@ export function AppSidebar({
                 onSelectHome={onSelectHome}
                 onSelectProjects={onSelectProjects}
                 onSelectPulse={onSelectPulse}
+                onSelectRadar={onSelectRadar}
                 onSelectWorkflows={onSelectWorkflows}
                 selectedView={selectedView}
               />

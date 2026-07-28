@@ -79,6 +79,17 @@ export function useAppNavigation() {
     [commitNavigation],
   );
 
+  const goRadar = React.useCallback(
+    (behavior?: NavigationBehavior) =>
+      commitNavigation(
+        {
+          to: "/radar",
+        },
+        behavior,
+      ),
+    [commitNavigation],
+  );
+
   const goProjects = React.useCallback(
     (behavior?: NavigationBehavior) =>
       commitNavigation(
@@ -303,6 +314,7 @@ export function useAppNavigation() {
     goProject,
     goProjects,
     goPulse,
+    goRadar,
     goSettings,
     goWorkflow,
     goWorkflows,

@@ -8,6 +8,7 @@ import { Route as rootRouteImport } from "./routes/root";
 import { Route as workflowsRouteImport } from "./routes/workflows";
 import { Route as settingsRouteImport } from "./routes/settings";
 import { Route as remindersRouteImport } from "./routes/reminders";
+import { Route as radarRouteImport } from "./routes/radar";
 import { Route as pulseRouteImport } from "./routes/pulse";
 import { Route as projectsRouteImport } from "./routes/projects";
 import { Route as agentsRouteImport } from "./routes/agents";
@@ -31,6 +32,11 @@ const settingsRoute = settingsRouteImport.update({
 const remindersRoute = remindersRouteImport.update({
   id: "/reminders",
   path: "/reminders",
+  getParentRoute: () => rootRouteImport,
+} as any);
+const radarRoute = radarRouteImport.update({
+  id: "/radar",
+  path: "/radar",
   getParentRoute: () => rootRouteImport,
 } as any);
 const pulseRoute = pulseRouteImport.update({
@@ -85,6 +91,7 @@ export interface FileRoutesByFullPath {
   "/agents": typeof agentsRoute;
   "/projects": typeof projectsRoute;
   "/pulse": typeof pulseRoute;
+  "/radar": typeof radarRoute;
   "/reminders": typeof remindersRoute;
   "/settings": typeof settingsRoute;
   "/workflows": typeof workflowsRoute;
@@ -99,6 +106,7 @@ export interface FileRoutesByTo {
   "/agents": typeof agentsRoute;
   "/projects": typeof projectsRoute;
   "/pulse": typeof pulseRoute;
+  "/radar": typeof radarRoute;
   "/reminders": typeof remindersRoute;
   "/settings": typeof settingsRoute;
   "/workflows": typeof workflowsRoute;
@@ -114,6 +122,7 @@ export interface FileRoutesById {
   "/agents": typeof agentsRoute;
   "/projects": typeof projectsRoute;
   "/pulse": typeof pulseRoute;
+  "/radar": typeof radarRoute;
   "/reminders": typeof remindersRoute;
   "/settings": typeof settingsRoute;
   "/workflows": typeof workflowsRoute;
@@ -130,6 +139,7 @@ export interface FileRouteTypes {
     | "/agents"
     | "/projects"
     | "/pulse"
+    | "/radar"
     | "/reminders"
     | "/settings"
     | "/workflows"
@@ -144,6 +154,7 @@ export interface FileRouteTypes {
     | "/agents"
     | "/projects"
     | "/pulse"
+    | "/radar"
     | "/reminders"
     | "/settings"
     | "/workflows"
@@ -158,6 +169,7 @@ export interface FileRouteTypes {
     | "/agents"
     | "/projects"
     | "/pulse"
+    | "/radar"
     | "/reminders"
     | "/settings"
     | "/workflows"
@@ -173,6 +185,7 @@ export interface RootRouteChildren {
   agentsRoute: typeof agentsRoute;
   projectsRoute: typeof projectsRoute;
   pulseRoute: typeof pulseRoute;
+  radarRoute: typeof radarRoute;
   remindersRoute: typeof remindersRoute;
   settingsRoute: typeof settingsRoute;
   workflowsRoute: typeof workflowsRoute;
@@ -204,6 +217,13 @@ declare module "@tanstack/react-router" {
       path: "/reminders";
       fullPath: "/reminders";
       preLoaderRoute: typeof remindersRouteImport;
+      parentRoute: typeof rootRouteImport;
+    };
+    "/radar": {
+      id: "/radar";
+      path: "/radar";
+      fullPath: "/radar";
+      preLoaderRoute: typeof radarRouteImport;
       parentRoute: typeof rootRouteImport;
     };
     "/pulse": {
@@ -277,6 +297,7 @@ const rootRouteChildren: RootRouteChildren = {
   agentsRoute: agentsRoute,
   projectsRoute: projectsRoute,
   pulseRoute: pulseRoute,
+  radarRoute: radarRoute,
   remindersRoute: remindersRoute,
   settingsRoute: settingsRoute,
   workflowsRoute: workflowsRoute,

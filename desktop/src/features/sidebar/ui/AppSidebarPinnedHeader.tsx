@@ -1,4 +1,11 @@
-import { Activity, Bell, Bot, FolderGit2, Zap } from "lucide-react";
+import {
+  Activity,
+  Bell,
+  Bot,
+  FolderGit2,
+  Radar as RadarIcon,
+  Zap,
+} from "lucide-react";
 
 import { TopbarSearch } from "@/features/search/ui/TopbarSearch";
 import { FeatureGate } from "@/shared/features";
@@ -19,7 +26,8 @@ type SidebarSelectedView =
   | "agents"
   | "workflows"
   | "pulse"
-  | "projects";
+  | "projects"
+  | "radar";
 
 type AppSidebarPinnedHeaderProps = {
   channelLabels: Record<string, string>;
@@ -41,6 +49,7 @@ type AppSidebarPrimaryMenuProps = {
   onSelectHome: () => void;
   onSelectProjects: () => void;
   onSelectPulse: () => void;
+  onSelectRadar: () => void;
   onSelectWorkflows: () => void;
   selectedView: SidebarSelectedView;
 };
@@ -86,6 +95,7 @@ export function AppSidebarPrimaryMenu({
   onSelectHome,
   onSelectProjects,
   onSelectPulse,
+  onSelectRadar,
   onSelectWorkflows,
   selectedView,
 }: AppSidebarPrimaryMenuProps) {
@@ -126,6 +136,20 @@ export function AppSidebarPrimaryMenu({
             >
               <Activity className="h-4 w-4" />
               <SidebarMenuLabel>Pulse</SidebarMenuLabel>
+            </SidebarMenuButton>
+          </SidebarMenuItem>
+        </FeatureGate>
+        <FeatureGate feature="radar">
+          <SidebarMenuItem>
+            <SidebarMenuButton
+              data-testid="open-radar-view"
+              isActive={selectedView === "radar"}
+              onClick={onSelectRadar}
+              tooltip="Radar"
+              type="button"
+            >
+              <RadarIcon className="h-4 w-4" />
+              <SidebarMenuLabel>Radar</SidebarMenuLabel>
             </SidebarMenuButton>
           </SidebarMenuItem>
         </FeatureGate>
