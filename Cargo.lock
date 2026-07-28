@@ -1266,6 +1266,7 @@ dependencies = [
 name = "buzz-voice"
 version = "0.1.0"
 dependencies = [
+ "regex",
  "serde_json",
  "sherpa-onnx",
 ]
@@ -1275,6 +1276,7 @@ name = "buzz-voice-mobile"
 version = "0.1.0"
 dependencies = [
  "buzz-voice",
+ "serde_json",
 ]
 
 [[package]]
