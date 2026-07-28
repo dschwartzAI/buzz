@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:collection';
+import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 import 'package:hooks_riverpod/hooks_riverpod.dart';
@@ -11,16 +12,29 @@ import 'voice_audio_output.dart';
 
 enum PocketVoicePhase { off, loading, listening, synthesizing, speaking, error }
 
+enum VoiceBackend { none, pocket, system }
+
+enum VoiceFallbackReason {
+  modelUnavailable,
+  loadFailure,
+  synthesisFailure,
+  resourcePressure,
+}
+
 @immutable
 class PocketVoiceState {
   final PocketVoicePhase phase;
   final String? conversationKey;
   final String? error;
+  final VoiceBackend backend;
+  final VoiceFallbackReason? fallbackReason;
 
   const PocketVoiceState({
     this.phase = PocketVoicePhase.off,
     this.conversationKey,
     this.error,
+    this.backend = VoiceBackend.none,
+    this.fallbackReason,
   });
 
   bool get enabled => phase != PocketVoicePhase.off;
@@ -28,6 +42,10 @@ class PocketVoiceState {
 
 final voiceAudioOutputProvider = Provider<VoiceAudioOutput>(
   (_) => PlatformVoiceAudioOutput(),
+);
+
+final systemVoiceFallbackAvailableProvider = Provider<bool>(
+  (_) => Platform.isIOS,
 );
 
 final pocketVoiceWorkerFactoryProvider = Provider<PocketVoiceWorker Function()>(
@@ -44,6 +62,7 @@ class PocketVoiceNotifier extends Notifier<PocketVoiceState> {
   final Queue<PocketWorkerAudio> _audio = Queue();
   PocketVoiceWorker? _worker;
   Future<PocketVoiceWorker>? _workerStart;
+  Future<void>? _workerRetirement;
   StreamSubscription<PocketWorkerResponse>? _workerSubscription;
   StreamSubscription<VoiceAudioEvent>? _audioSubscription;
   int _transitionEpoch = 0;
@@ -51,9 +70,17 @@ class PocketVoiceNotifier extends Notifier<PocketVoiceState> {
   int? _activeGeneration;
   bool _synthesisComplete = false;
   bool _playbackActive = false;
+  VoiceBackend _playbackBackend = VoiceBackend.none;
+  String? _pendingSystemText;
+  VoiceFallbackReason? _pendingFallbackReason;
+  bool _pocketSuppressed = false;
+  VoiceFallbackReason? _pocketSuppressionReason;
   bool _stopping = false;
   bool _queueWhileStopping = false;
   Future<void>? _stopFuture;
+
+  bool get _systemFallbackAvailable =>
+      ref.read(systemVoiceFallbackAvailableProvider);
 
   @override
   PocketVoiceState build() {
@@ -80,30 +107,66 @@ class PocketVoiceNotifier extends Notifier<PocketVoiceState> {
     await _stopConversation(preserveIncoming: false);
     if (epoch != _transitionEpoch) return;
 
+    _pocketSuppressed = false;
+    _pocketSuppressionReason = null;
     final model = ref.read(pocketModelProvider);
     if (model.phase != PocketModelPhase.ready || model.path == null) {
-      throw StateError('Download Pocket voice before starting a conversation.');
+      if (!_systemFallbackAvailable) {
+        throw StateError(
+          'Download Pocket voice before starting a conversation.',
+        );
+      }
+      state = PocketVoiceState(
+        phase: PocketVoicePhase.listening,
+        conversationKey: conversationKey,
+        backend: VoiceBackend.system,
+        fallbackReason: VoiceFallbackReason.modelUnavailable,
+      );
+      return;
     }
+
     state = PocketVoiceState(
       phase: PocketVoicePhase.loading,
       conversationKey: conversationKey,
+      backend: VoiceBackend.pocket,
     );
     try {
       await _ensureWorker(model.path!);
       if (epoch != _transitionEpoch) return;
+      if (_pocketSuppressed && _systemFallbackAvailable) {
+        state = PocketVoiceState(
+          phase: PocketVoicePhase.listening,
+          conversationKey: conversationKey,
+          backend: VoiceBackend.system,
+          fallbackReason: _pocketSuppressionReason,
+        );
+        _retirePocketWorker();
+        return;
+      }
       state = PocketVoiceState(
         phase: PocketVoicePhase.listening,
         conversationKey: conversationKey,
+        backend: VoiceBackend.pocket,
       );
       _startNextUtterance();
     } catch (error) {
-      if (epoch == _transitionEpoch) {
+      if (epoch != _transitionEpoch) return;
+      if (_systemFallbackAvailable) {
+        _suppressPocket(VoiceFallbackReason.loadFailure);
         state = PocketVoiceState(
-          phase: PocketVoicePhase.error,
+          phase: PocketVoicePhase.listening,
           conversationKey: conversationKey,
-          error: error.toString(),
+          backend: VoiceBackend.system,
+          fallbackReason: VoiceFallbackReason.loadFailure,
         );
+        _startNextUtterance();
+        return;
       }
+      state = PocketVoiceState(
+        phase: PocketVoicePhase.error,
+        conversationKey: conversationKey,
+        error: error.toString(),
+      );
       rethrow;
     }
   }
@@ -131,14 +194,17 @@ class PocketVoiceNotifier extends Notifier<PocketVoiceState> {
       state = PocketVoiceState(
         phase: PocketVoicePhase.listening,
         conversationKey: state.conversationKey,
+        backend: _idleBackend(),
+        fallbackReason: _idleFallbackReason(),
       );
       _startNextUtterance();
     }
   }
 
-  Future<PocketVoiceWorker> _ensureWorker(String modelPath) {
+  Future<PocketVoiceWorker> _ensureWorker(String modelPath) async {
+    await _workerRetirement;
     final worker = _worker;
-    if (worker != null && worker.isReady) return Future.value(worker);
+    if (worker != null && worker.isReady) return worker;
     final starting = _workerStart;
     if (starting != null) return starting;
 
@@ -147,21 +213,19 @@ class PocketVoiceNotifier extends Notifier<PocketVoiceState> {
     _workerSubscription = created.responses.listen(_handleWorkerResponse);
     final future = created.start(modelPath).then((_) => created);
     _workerStart = future;
-    return () async {
-      try {
-        return await future;
-      } catch (error, stackTrace) {
-        if (identical(_worker, created)) {
-          _worker = null;
-          await _workerSubscription?.cancel();
-          _workerSubscription = null;
-        }
-        await created.dispose();
-        Error.throwWithStackTrace(error, stackTrace);
-      } finally {
-        if (identical(_workerStart, future)) _workerStart = null;
+    try {
+      return await future;
+    } catch (error, stackTrace) {
+      if (identical(_worker, created)) {
+        _worker = null;
+        await _workerSubscription?.cancel();
+        _workerSubscription = null;
       }
-    }();
+      await created.dispose();
+      Error.throwWithStackTrace(error, stackTrace);
+    } finally {
+      if (identical(_workerStart, future)) _workerStart = null;
+    }
   }
 
   Future<void> _stopConversation({required bool preserveIncoming}) async {
@@ -178,9 +242,12 @@ class PocketVoiceNotifier extends Notifier<PocketVoiceState> {
     _queueWhileStopping = preserveIncoming;
     _utterances.clear();
     _audio.clear();
+    _pendingSystemText = null;
+    _pendingFallbackReason = null;
     _activeGeneration = null;
     _synthesisComplete = false;
     _playbackActive = false;
+    _playbackBackend = VoiceBackend.none;
     final output = ref.read(voiceAudioOutputProvider);
     final worker = _worker;
     worker?.cancel();
@@ -204,29 +271,124 @@ class PocketVoiceNotifier extends Notifier<PocketVoiceState> {
     if (_stopping ||
         _activeGeneration != null ||
         _utterances.isEmpty ||
-        !state.enabled) {
+        !state.enabled ||
+        state.phase == PocketVoicePhase.loading) {
       return;
     }
-    final worker = _worker;
-    if (worker == null || !worker.isReady) return;
     final utterance = _utterances.removeFirst();
     final generation = ++_nextGeneration;
     _activeGeneration = generation;
     _synthesisComplete = false;
+    _pendingSystemText = null;
+    _pendingFallbackReason = null;
+
+    final model = ref.read(pocketModelProvider);
+    if (!_pocketSuppressed &&
+        model.phase == PocketModelPhase.ready &&
+        model.path != null) {
+      final worker = _worker;
+      if (worker != null && worker.isReady) {
+        _beginPocket(generation, utterance, worker);
+      } else {
+        state = PocketVoiceState(
+          phase: PocketVoicePhase.loading,
+          conversationKey: state.conversationKey,
+          backend: VoiceBackend.pocket,
+        );
+        unawaited(_loadPocketAndBegin(generation, utterance, model.path!));
+      }
+      return;
+    }
+    _beginSystem(
+      generation,
+      utterance,
+      _pocketSuppressionReason ?? VoiceFallbackReason.modelUnavailable,
+    );
+  }
+
+  Future<void> _loadPocketAndBegin(
+    int generation,
+    String utterance,
+    String modelPath,
+  ) async {
+    try {
+      final worker = await _ensureWorker(modelPath);
+      if (generation != _activeGeneration || !state.enabled) return;
+      if (_pocketSuppressed && _systemFallbackAvailable) {
+        _retirePocketWorker();
+        _beginSystem(
+          generation,
+          utterance,
+          _pocketSuppressionReason ?? VoiceFallbackReason.resourcePressure,
+        );
+        return;
+      }
+      _beginPocket(generation, utterance, worker);
+    } catch (error) {
+      if (generation != _activeGeneration || !state.enabled) return;
+      if (_systemFallbackAvailable) {
+        _suppressPocket(VoiceFallbackReason.loadFailure);
+        _beginSystem(generation, utterance, VoiceFallbackReason.loadFailure);
+      } else {
+        _failPlayback(error.toString());
+      }
+    }
+  }
+
+  void _beginPocket(
+    int generation,
+    String utterance,
+    PocketVoiceWorker worker,
+  ) {
+    if (generation != _activeGeneration || !state.enabled) return;
     state = PocketVoiceState(
       phase: PocketVoicePhase.synthesizing,
       conversationKey: state.conversationKey,
+      backend: VoiceBackend.pocket,
     );
     try {
       worker.synthesize(generation, utterance);
     } catch (error) {
-      _activeGeneration = null;
-      state = PocketVoiceState(
-        phase: PocketVoicePhase.error,
-        conversationKey: state.conversationKey,
-        error: error.toString(),
+      _handlePocketFailure(
+        PocketWorkerFailure(
+          error.toString(),
+          generation: generation,
+          remainingText: utterance,
+        ),
       );
     }
+  }
+
+  void _beginSystem(int generation, String text, VoiceFallbackReason reason) {
+    if (generation != _activeGeneration || !state.enabled) return;
+    if (!_systemFallbackAvailable) {
+      _failPlayback('System speech is unavailable.');
+      return;
+    }
+    final trimmed = text.trim();
+    if (trimmed.isEmpty) {
+      _finishUtterance();
+      return;
+    }
+    _pendingSystemText = null;
+    _pendingFallbackReason = null;
+    _playbackActive = true;
+    _playbackBackend = VoiceBackend.system;
+    state = PocketVoiceState(
+      phase: PocketVoicePhase.speaking,
+      conversationKey: state.conversationKey,
+      backend: VoiceBackend.system,
+      fallbackReason: reason,
+    );
+    ref.read(voiceAudioOutputProvider).speakSystem(trimmed).catchError((
+      Object error,
+    ) {
+      if (generation == _activeGeneration &&
+          _playbackBackend == VoiceBackend.system &&
+          state.enabled) {
+        _failPlayback(error.toString());
+      }
+    });
   }
 
   void _handleWorkerResponse(PocketWorkerResponse response) {
@@ -237,16 +399,54 @@ class PocketVoiceNotifier extends Notifier<PocketVoiceState> {
       case PocketWorkerDone():
         if (response.generation != _activeGeneration) return;
         _synthesisComplete = true;
-        if (!_playbackActive && _audio.isEmpty) _finishUtterance();
+        _playNextOutput();
       case PocketWorkerFailure():
-        if (response.generation != _activeGeneration) return;
-        _failPlayback(response.message);
+        _handlePocketFailure(response);
       case PocketWorkerAudio():
         if (response.generation != _activeGeneration) return;
         _audio.add(response);
         if (response.isLast) _synthesisComplete = true;
-        unawaited(_playNextChunk());
+        _playNextOutput();
     }
+  }
+
+  void _handlePocketFailure(PocketWorkerFailure response) {
+    if (response.generation != _activeGeneration) return;
+    if (!_systemFallbackAvailable) {
+      _failPlayback(response.message);
+      return;
+    }
+    final reason =
+        _pocketSuppressionReason == VoiceFallbackReason.resourcePressure
+        ? VoiceFallbackReason.resourcePressure
+        : VoiceFallbackReason.synthesisFailure;
+    _suppressPocket(reason);
+    _synthesisComplete = true;
+    final remaining = response.remainingText?.trim();
+    if (remaining != null && remaining.isNotEmpty) {
+      _pendingSystemText = remaining;
+      _pendingFallbackReason = reason;
+    }
+    _retirePocketWorker();
+    _playNextOutput();
+  }
+
+  void _playNextOutput() {
+    if (_playbackActive || _activeGeneration == null) return;
+    if (_audio.isNotEmpty) {
+      unawaited(_playNextChunk());
+      return;
+    }
+    final pendingSystemText = _pendingSystemText;
+    if (pendingSystemText != null) {
+      _beginSystem(
+        _activeGeneration!,
+        pendingSystemText,
+        _pendingFallbackReason ?? VoiceFallbackReason.synthesisFailure,
+      );
+      return;
+    }
+    if (_synthesisComplete) _finishUtterance();
   }
 
   Future<void> _playNextChunk() async {
@@ -255,6 +455,7 @@ class PocketVoiceNotifier extends Notifier<PocketVoiceState> {
     final conversationKey = state.conversationKey;
     final chunk = _audio.removeFirst();
     _playbackActive = true;
+    _playbackBackend = VoiceBackend.pocket;
     final output = ref.read(voiceAudioOutputProvider);
     try {
       await output.play(
@@ -271,12 +472,14 @@ class PocketVoiceNotifier extends Notifier<PocketVoiceState> {
         !state.enabled ||
         state.conversationKey != conversationKey) {
       _playbackActive = false;
+      _playbackBackend = VoiceBackend.none;
       await output.stop();
       return;
     }
     state = PocketVoiceState(
       phase: PocketVoicePhase.speaking,
       conversationKey: state.conversationKey,
+      backend: VoiceBackend.pocket,
     );
   }
 
@@ -284,24 +487,88 @@ class PocketVoiceNotifier extends Notifier<PocketVoiceState> {
     switch (event) {
       case VoiceAudioEvent.completed:
         if (!_playbackActive) return;
+        final completedBackend = _playbackBackend;
         _playbackActive = false;
-        if (_audio.isNotEmpty) {
-          unawaited(_playNextChunk());
-        } else if (_synthesisComplete) {
+        _playbackBackend = VoiceBackend.none;
+        if (completedBackend == VoiceBackend.system) {
           _finishUtterance();
-        } else if (state.enabled) {
-          state = PocketVoiceState(
-            phase: PocketVoicePhase.synthesizing,
-            conversationKey: state.conversationKey,
-          );
+        } else {
+          _playNextOutput();
         }
       case VoiceAudioEvent.error:
-        if (_playbackActive) _failPlayback('Pocket voice playback failed.');
+        if (_playbackActive) {
+          _failPlayback(
+            _playbackBackend == VoiceBackend.pocket
+                ? 'Pocket voice playback failed.'
+                : 'System voice playback failed.',
+          );
+        }
       case VoiceAudioEvent.interrupted:
       case VoiceAudioEvent.routeLost:
       case VoiceAudioEvent.backgrounded:
         unawaited(interrupt());
+      case VoiceAudioEvent.foregrounded:
+        _pocketSuppressed = false;
+        _pocketSuppressionReason = null;
+      case VoiceAudioEvent.resourcePressure:
+        _handleResourcePressure();
     }
+  }
+
+  void _handleResourcePressure() {
+    if (!_systemFallbackAvailable) return;
+    _suppressPocket(VoiceFallbackReason.resourcePressure);
+    final worker = _worker;
+    if (worker != null) {
+      worker.cancel();
+      _retirePocketWorker();
+    }
+    if (_activeGeneration == null && state.enabled) {
+      state = PocketVoiceState(
+        phase: PocketVoicePhase.listening,
+        conversationKey: state.conversationKey,
+        backend: VoiceBackend.system,
+        fallbackReason: VoiceFallbackReason.resourcePressure,
+      );
+    }
+  }
+
+  void _suppressPocket(VoiceFallbackReason reason) {
+    _pocketSuppressed = true;
+    _pocketSuppressionReason = reason;
+  }
+
+  void _retirePocketWorker() {
+    if (_workerRetirement != null) return;
+    final worker = _worker;
+    if (worker == null) return;
+    final retirement = () async {
+      final starting = _workerStart;
+      if (starting != null) {
+        try {
+          await starting;
+        } catch (_) {
+          return;
+        }
+      }
+      if (!identical(_worker, worker)) return;
+      worker.cancel();
+      await worker.cancelAndWait();
+      if (identical(_worker, worker)) {
+        _worker = null;
+        await _workerSubscription?.cancel();
+        _workerSubscription = null;
+      }
+      await worker.dispose();
+    }();
+    _workerRetirement = retirement;
+    unawaited(
+      retirement.whenComplete(() {
+        if (identical(_workerRetirement, retirement)) {
+          _workerRetirement = null;
+        }
+      }),
+    );
   }
 
   void _failPlayback(String message) {
@@ -309,8 +576,11 @@ class PocketVoiceNotifier extends Notifier<PocketVoiceState> {
     _utterances.clear();
     _activeGeneration = null;
     _audio.clear();
+    _pendingSystemText = null;
+    _pendingFallbackReason = null;
     _synthesisComplete = false;
     _playbackActive = false;
+    _playbackBackend = VoiceBackend.none;
     unawaited(ref.read(voiceAudioOutputProvider).stop());
     if (state.enabled) {
       state = PocketVoiceState(
@@ -323,15 +593,36 @@ class PocketVoiceNotifier extends Notifier<PocketVoiceState> {
 
   void _finishUtterance() {
     _activeGeneration = null;
+    _pendingSystemText = null;
+    _pendingFallbackReason = null;
     _synthesisComplete = false;
     _playbackActive = false;
+    _playbackBackend = VoiceBackend.none;
     if (_utterances.isNotEmpty) {
       _startNextUtterance();
     } else if (state.enabled) {
       state = PocketVoiceState(
         phase: PocketVoicePhase.listening,
         conversationKey: state.conversationKey,
+        backend: _idleBackend(),
+        fallbackReason: _idleFallbackReason(),
       );
     }
+  }
+
+  VoiceBackend _idleBackend() {
+    if (_pocketSuppressed) return VoiceBackend.system;
+    final model = ref.read(pocketModelProvider);
+    return model.phase == PocketModelPhase.ready
+        ? VoiceBackend.pocket
+        : VoiceBackend.system;
+  }
+
+  VoiceFallbackReason? _idleFallbackReason() {
+    if (_pocketSuppressed) return _pocketSuppressionReason;
+    final model = ref.read(pocketModelProvider);
+    return model.phase == PocketModelPhase.ready
+        ? null
+        : VoiceFallbackReason.modelUnavailable;
   }
 }

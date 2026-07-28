@@ -16,6 +16,14 @@ class RunnerTests: XCTestCase {
     XCTAssertTrue(session.categoryOptions.contains(.duckOthers))
   }
 
+  func testSystemVoiceUsesAccessibilitySettingsWithoutSelectingAVoice() {
+    let utterance = VoiceAudioOutput.systemUtterance("Accessibility voice")
+
+    XCTAssertTrue(utterance.prefersAssistiveTechnologySettings)
+    XCTAssertNil(utterance.voice)
+    XCTAssertEqual(utterance.rate, AVSpeechUtteranceDefaultSpeechRate)
+  }
+
   func testPocketVoiceProducesValidPcmWhenModelIsAvailable() throws {
     let modelPath =
       ProcessInfo.processInfo.environment["BUZZ_POCKET_MODEL_DIR"]
