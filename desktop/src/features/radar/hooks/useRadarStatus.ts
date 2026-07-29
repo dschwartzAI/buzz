@@ -72,7 +72,7 @@ async function fetchRadarSnapshot(): Promise<RadarSnapshot> {
   return {
     status: {
       state: "waiting_for_x_access",
-      lastScanAt: new Date().toISOString(),
+      lastScanAt: null,
       nextScanAt: null,
       lastError: null,
     },
