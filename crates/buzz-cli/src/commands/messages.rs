@@ -9,8 +9,8 @@ use crate::validate::{
     validate_content_size, validate_hex64, validate_uuid, MAX_DIFF_BYTES,
 };
 use buzz_sdk::mentions::{
-    extract_at_mentions_with_known, extract_nostr_uris, merge_mentions, strip_code_regions,
-    MENTION_CAP,
+    extract_at_mentions_with_known, extract_at_names, extract_nostr_uris, merge_mentions,
+    strip_code_regions, MENTION_CAP,
 };
 
 /// Extract the thread root event ID from a Nostr tag array.
@@ -121,10 +121,10 @@ async fn resolve_channel_id(client: &BuzzClient, event_id: &str) -> Result<Uuid,
 
 /// Resolve `@name` mentions in `content` against this channel's members.
 ///
-/// Queries kind 39002 (channel members) then kind 0 (profiles), parses
-/// display names once, and feeds them to [`extract_at_mentions_with_known`]
-/// for multi-word matching. On any I/O or parse failure, returns an empty
-/// vec — auto-tagging is best-effort and must never block a send.
+/// Queries kind 39002 (channel members) then kind 0 (profiles). It also
+/// searches profiles for each raw `@name` token so mentions still resolve
+/// while a newly-created channel's membership event is being indexed.
+/// Resolution remains best-effort and never blocks a send.
 async fn resolve_content_mentions(
     client: &BuzzClient,
     channel_id: &str,
@@ -140,21 +140,42 @@ async fn resolve_content_mentions(
         "#d": [channel_id],
         "limit": 1,
     });
-    let member_pubkeys = match fetch_member_pubkeys(client, &members_filter).await {
-        Some(pks) if !pks.is_empty() => pks,
-        _ => return vec![],
-    };
+    let member_pubkeys = fetch_member_pubkeys(client, &members_filter)
+        .await
+        .unwrap_or_default();
 
     // 2. Profiles for those members (kind 0).
-    let profiles_filter = serde_json::json!({
-        "kinds": [0],
-        "authors": member_pubkeys,
-        "limit": member_pubkeys.len(),
-    });
-    let profile_events = match fetch_events(client, &profiles_filter).await {
-        Some(v) => v,
-        None => return vec![],
+    let mut profile_events = if member_pubkeys.is_empty() {
+        vec![]
+    } else {
+        let profiles_filter = serde_json::json!({
+            "kinds": [0],
+            "authors": member_pubkeys,
+            "limit": member_pubkeys.len(),
+        });
+        fetch_events(client, &profiles_filter)
+            .await
+            .unwrap_or_default()
     };
+
+    // A channel can be created and messaged before its membership snapshot is
+    // visible through /query. Search each raw token as a fallback, matching the
+    // behavior of `buzz users get --name`. Exact display-name matching below
+    // prevents broader NIP-50 results from becoming mention tags.
+    for raw_name in extract_at_names(content)
+        .into_iter()
+        .filter(|name| !profile_name_starts_with(&profile_events, name))
+        .take(MENTION_CAP)
+    {
+        let search_filter = serde_json::json!({
+            "kinds": [0],
+            "search": raw_name,
+            "limit": 100,
+        });
+        if let Some(events) = fetch_events(client, &search_filter).await {
+            merge_profile_events(&mut profile_events, events);
+        }
+    }
 
     // 3. Single parse: extract (pubkey, display_name) pairs from profile JSON.
     let mut name_to_pubkeys: std::collections::HashMap<String, Vec<String>> =
@@ -196,6 +217,45 @@ async fn resolve_content_mentions(
         .flat_map(|n| name_to_pubkeys.get(n).into_iter().flatten())
         .cloned()
         .collect()
+}
+
+fn profile_name_starts_with(profiles: &[serde_json::Value], raw_name: &str) -> bool {
+    profiles.iter().any(|event| {
+        let Some(content) = event.get("content").and_then(|value| value.as_str()) else {
+            return false;
+        };
+        let Ok(profile) = serde_json::from_str::<serde_json::Value>(content) else {
+            return false;
+        };
+        let Some(display_name) = profile
+            .get("display_name")
+            .or_else(|| profile.get("name"))
+            .and_then(|value| value.as_str())
+        else {
+            return false;
+        };
+        let display_name = display_name.to_ascii_lowercase();
+        display_name == raw_name
+            || display_name
+                .strip_prefix(raw_name)
+                .is_some_and(|suffix| suffix.starts_with(|c: char| !c.is_ascii_alphanumeric()))
+    })
+}
+
+fn merge_profile_events(
+    profiles: &mut Vec<serde_json::Value>,
+    additional: Vec<serde_json::Value>,
+) {
+    let mut seen: std::collections::HashSet<String> = profiles
+        .iter()
+        .filter_map(|event| event.get("pubkey")?.as_str().map(str::to_owned))
+        .collect();
+    profiles.extend(additional.into_iter().filter(|event| {
+        event
+            .get("pubkey")
+            .and_then(|value| value.as_str())
+            .is_some_and(|pubkey| seen.insert(pubkey.to_owned()))
+    }));
 }
 
 /// Fetch raw events for `filter` via the relay's `/query` endpoint.
@@ -876,7 +936,10 @@ pub async fn dispatch(
 
 #[cfg(test)]
 mod tests {
-    use super::{find_root_from_tags, match_profiles_by_name, parse_member_pubkeys};
+    use super::{
+        find_root_from_tags, match_profiles_by_name, merge_profile_events, parse_member_pubkeys,
+        profile_name_starts_with,
+    };
     use buzz_sdk::mentions::{
         extract_at_mentions_with_known, extract_at_names, match_names_to_profiles, MentionProfile,
     };
@@ -1061,6 +1124,44 @@ mod tests {
         // Sanity: no `@names` in body → no profile match attempt needed.
         let names = extract_at_names("plain message, no mentions");
         assert!(names.is_empty());
+    }
+
+    #[test]
+    fn member_profile_prefix_skips_redundant_fallback_search() {
+        let profiles = vec![json!({
+            "pubkey": PK_VALID_A,
+            "content": r#"{"display_name":"Bob (CC)"}"#,
+        })];
+
+        assert!(profile_name_starts_with(&profiles, "bob"));
+        assert!(!profile_name_starts_with(&profiles, "bo"));
+        assert!(!profile_name_starts_with(&profiles, "alice"));
+    }
+
+    #[test]
+    fn profile_search_fallback_merges_new_pubkeys_without_duplicates() {
+        let mut profiles = vec![json!({
+            "pubkey": PK_VALID_A,
+            "content": r#"{"display_name":"Alice"}"#,
+        })];
+        merge_profile_events(
+            &mut profiles,
+            vec![
+                json!({
+                    "pubkey": PK_VALID_A,
+                    "content": r#"{"display_name":"Alice (duplicate)"}"#,
+                }),
+                json!({
+                    "pubkey": PK_VALID_B,
+                    "content": r#"{"display_name":"Bob (CC)"}"#,
+                }),
+                json!({"content": r#"{"display_name":"Missing pubkey"}"#}),
+            ],
+        );
+
+        assert_eq!(profiles.len(), 2);
+        assert_eq!(profiles[0]["pubkey"], PK_VALID_A);
+        assert_eq!(profiles[1]["pubkey"], PK_VALID_B);
     }
 
     #[test]
