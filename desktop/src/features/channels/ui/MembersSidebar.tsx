@@ -630,9 +630,15 @@ export function MembersSidebar({
           member={member}
           memberIsBot={memberIsBot}
           memberAvatarLabel={
-            member.displayName ?? truncatePubkey(member.pubkey)
+            member.displayName?.trim() ||
+            memberProfile?.displayName?.trim() ||
+            truncatePubkey(member.pubkey)
           }
-          memberLabel={formatMemberName(member, currentPubkey)}
+          memberLabel={formatMemberName(
+            member,
+            currentPubkey,
+            memberProfile?.displayName,
+          )}
           moderationState={moderationStateByPubkey.get(
             normalizePubkey(member.pubkey),
           )}
