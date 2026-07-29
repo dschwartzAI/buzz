@@ -154,6 +154,13 @@ export type RawManagedAgent = {
   auto_restart_on_config_change?: boolean;
   backend: ManagedAgentBackend;
   backend_agent_id: string | null;
+  owner_attestation?: {
+    state: ManagedAgent["ownerAttestation"]["state"];
+    owner_pubkey: string | null;
+    conditions: string | null;
+    expires_at: number | null;
+    fingerprint: string | null;
+  };
   // Optional: pre-feature mock fixtures may omit these. Mapped to
   // `"owner-only"` / `[]` in `fromRawManagedAgent`.
   respond_to?: ManagedAgent["respondTo"];
@@ -735,6 +742,13 @@ export function fromRawManagedAgent(agent: RawManagedAgent): ManagedAgent {
     autoRestartOnConfigChange: agent.auto_restart_on_config_change ?? true,
     backend: agent.backend,
     backendAgentId: agent.backend_agent_id,
+    ownerAttestation: {
+      state: agent.owner_attestation?.state ?? "missing",
+      ownerPubkey: agent.owner_attestation?.owner_pubkey ?? null,
+      conditions: agent.owner_attestation?.conditions ?? null,
+      expiresAt: agent.owner_attestation?.expires_at ?? null,
+      fingerprint: agent.owner_attestation?.fingerprint ?? null,
+    },
     // Fallbacks for pre-feature mocks/fixtures that don't carry these fields.
     // Real agent records always include them (defaulted server-side).
     respondTo: agent.respond_to ?? "owner-only",
