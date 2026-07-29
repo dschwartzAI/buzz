@@ -13,10 +13,10 @@ import { Button } from "@/shared/ui/button";
 import { Card } from "@/shared/ui/card";
 import { Skeleton } from "@/shared/ui/skeleton";
 
-// Scotty wires these buttons up to the real collector. Until then, every
-// control is visibly present but honestly inert.
 function notWiredYet(action: string) {
-  toast.info(`${action} isn't wired up yet — that's Scotty's part, next.`);
+  toast.info(
+    `${action} needs the VPS collector bridge, which is not connected yet.`,
+  );
 }
 
 const FINDING_SOURCE_COPY: Record<
@@ -96,9 +96,7 @@ function StatusCard({
         <span>Last scan: {formatTimestamp(lastScanAt)}</span>
         <span>Next scan: {formatTimestamp(nextScanAt)}</span>
       </div>
-      {lastError ? (
-        <p className="text-sm text-red-400">{lastError}</p>
-      ) : null}
+      {lastError ? <p className="text-sm text-red-400">{lastError}</p> : null}
       <div className="flex flex-wrap gap-2 pt-1">
         <Button
           onClick={() => notWiredYet("Scan now")}
@@ -145,9 +143,6 @@ function SourcesSection({ sources }: { sources: RadarSource[] }) {
         </Card>
       ) : (
         <div className="space-y-2">
-          <p className="text-xs text-muted-foreground">
-            Example — Scotty connects the real watch list next.
-          </p>
           {sources.map((source) => (
             <Card className="p-3 text-sm" key={source.id}>
               {source.label}
@@ -171,17 +166,12 @@ function FindingsSection({ findings }: { findings: RadarFinding[] }) {
         </Card>
       ) : (
         <div className="space-y-2">
-          <p className="text-xs text-muted-foreground">
-            Example — real finds replace these once Scotty wires the sources.
-          </p>
           {findings.map((finding) => {
             const sourceCopy = FINDING_SOURCE_COPY[finding.source];
             return (
               <Card className="space-y-1 p-3 text-sm" key={finding.id}>
                 <div className="flex items-center gap-2">
-                  <Badge variant={sourceCopy.variant}>
-                    {sourceCopy.label}
-                  </Badge>
+                  <Badge variant={sourceCopy.variant}>{sourceCopy.label}</Badge>
                 </div>
                 <a
                   className="font-medium text-primary hover:underline"
@@ -191,9 +181,7 @@ function FindingsSection({ findings }: { findings: RadarFinding[] }) {
                 >
                   {finding.summary}
                 </a>
-                <p className="text-muted-foreground">
-                  {finding.whyItMatters}
-                </p>
+                <p className="text-muted-foreground">{finding.whyItMatters}</p>
                 {finding.chiefsTake ? (
                   <p className="text-muted-foreground italic">
                     Chief's take: {finding.chiefsTake}

@@ -16,9 +16,7 @@ export const Route = createFileRoute("/radar")({
 function RadarRouteComponent() {
   usePreviewFeatureWarning("radar");
   return (
-    <React.Suspense
-      fallback={<ViewLoadingFallback kind="workflows" />}
-    >
+    <React.Suspense fallback={<ViewLoadingFallback kind="workflows" />}>
       <RadarScreen />
     </React.Suspense>
   );

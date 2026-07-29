@@ -1,48 +1,86 @@
 import * as React from "react";
 
-import type { RadarSnapshot } from "@/features/radar/lib/radarTypes";
+import type {
+  RadarFinding,
+  RadarSnapshot,
+} from "@/features/radar/lib/radarTypes";
 
-// Bob's slice ends here: this is the seam Scotty wires to the real
-// collector/status contract (Buzz events or a narrow local API — see
-// issue 9854ad5f). The status block is genuinely "waiting for X access" —
-// that's today's real state, not a placeholder. Sources and findings below
-// ARE placeholders (per Chief's direction) so the full shape of the screen
-// is visible before Scotty wires either source in; the UI marks them as
-// examples so they're never mistaken for live data.
+const BUZZ_COMMITS_URL =
+  "https://api.github.com/repos/dschwartzAI/buzz/commits?sha=main&per_page=20";
+
+type GithubCommit = {
+  sha?: string;
+  html_url?: string;
+  commit?: {
+    message?: string;
+    author?: { date?: string | null };
+  };
+};
+
+function firstUsefulSentence(value: string | null | undefined): string | null {
+  const normalized = value
+    ?.replace(/<!--[\s\S]*?-->/g, "")
+    .replace(/[#*_`>\r\n]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!normalized) return null;
+  const sentence = normalized.match(/^.*?[.!?](?:\s|$)/)?.[0] ?? normalized;
+  return sentence.slice(0, 240);
+}
+
+function findingsFromMainCommits(value: unknown): RadarFinding[] {
+  if (!Array.isArray(value)) return [];
+
+  return value.flatMap((candidate) => {
+    const entry = candidate as GithubCommit;
+    const message = entry.commit?.message?.trim();
+    const title = message?.split("\n", 1)[0]?.trim();
+    const date = entry.commit?.author?.date;
+    if (
+      typeof entry.sha !== "string" ||
+      typeof entry.html_url !== "string" ||
+      !title ||
+      typeof date !== "string"
+    ) {
+      return [];
+    }
+
+    const detail = message?.slice(title.length).trim();
+    return [
+      {
+        id: `buzz-commit-${entry.sha}`,
+        url: entry.html_url,
+        summary: title,
+        whyItMatters:
+          firstUsefulSentence(detail) ?? "This shipped on Buzz's main branch.",
+        chiefsTake: null,
+        foundAt: date,
+        source: "buzz_update" as const,
+      },
+    ];
+  });
+}
+
 async function fetchRadarSnapshot(): Promise<RadarSnapshot> {
+  const response = await fetch(BUZZ_COMMITS_URL, {
+    headers: { Accept: "application/vnd.github+json" },
+  });
+  if (!response.ok) {
+    throw new Error(`Buzz updates returned HTTP ${response.status}`);
+  }
+
   return {
     status: {
       state: "waiting_for_x_access",
-      lastScanAt: null,
+      lastScanAt: new Date().toISOString(),
       nextScanAt: null,
       lastError: null,
     },
     sources: [
-      { id: "example-source-1", label: "@AnthropicAI (X account)" },
-      { id: "example-source-2", label: 'search: "buzz nostr"' },
+      { id: "buzz-main", label: "Buzz updates merged to main" },
+      { id: "x-watch", label: "X watch (waiting for enrolled API access)" },
     ],
-    findings: [
-      {
-        id: "example-finding-1",
-        url: "https://github.com/block/buzz/releases",
-        summary: "Buzz shipped use-limited invite links",
-        whyItMatters:
-          "Makes it safer to share an invite link publicly without it being reused indefinitely.",
-        chiefsTake: "Worth turning on for any channel we link from outside Buzz.",
-        foundAt: "2026-07-27T12:00:00.000Z",
-        source: "buzz_update",
-      },
-      {
-        id: "example-finding-2",
-        url: "https://x.com/example/status/0",
-        summary: "An X account discusses a new agent-orchestration pattern",
-        whyItMatters:
-          "Relevant to how Buzz agents hand off work to each other.",
-        chiefsTake: null,
-        foundAt: "2026-07-27T09:00:00.000Z",
-        source: "x_watch",
-      },
-    ],
+    findings: findingsFromMainCommits(await response.json()),
   };
 }
 
