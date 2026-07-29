@@ -189,11 +189,23 @@ pub fn invoke_provider(
         .map(|c| format!("exit code {c}"))
         .unwrap_or_else(|| "killed by signal".to_string());
 
-    // Fail on non-zero exit regardless of stdout content. A provider that
-    // crashes mid-deploy may flush partial JSON before dying — trusting that
-    // output would be worse than surfacing the failure.
+    // Parse a structured provider error even when the provider exits non-zero.
+    // The response remains untrusted: a non-zero exit can never produce a
+    // successful result, but its redacted `error` field is more useful than
+    // "empty stderr" for providers that deliberately return JSON on stdout.
+    let stdout_str = String::from_utf8_lossy(&stdout_buf);
+    let parsed_response = stdout_str
+        .lines()
+        .find_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+        .or_else(|| serde_json::from_str(stdout_str.trim()).ok());
     let exited_ok = exit_status.success();
     if !exited_ok {
+        if let Some(response) = parsed_response.as_ref() {
+            if response.get("ok").and_then(|value| value.as_bool()) == Some(false) {
+                let error = response["error"].as_str().unwrap_or("unknown error");
+                return Err(redact_secrets_with(error, &request_secret_refs));
+            }
+        }
         let stderr_snippet = &stderr_redacted[..stderr_redacted.len().min(4096)];
         if stderr_snippet.is_empty() {
             return Err(format!("provider failed ({exit_info}, empty stderr)"));
@@ -207,21 +219,14 @@ pub fn invoke_provider(
     // Incremental JSON parse: try each line, then try the entire buffer.
     // Handles providers that emit JSON on a single line (common) as well as
     // providers that write JSON without a trailing newline.
-    let stdout_str = String::from_utf8_lossy(&stdout_buf);
-    let response: serde_json::Value = stdout_str
-        .lines()
-        .find_map(|line| serde_json::from_str(line).ok())
-        .or_else(|| serde_json::from_str(stdout_str.trim()).ok())
-        .ok_or_else(|| {
-            let stderr_snippet = &stderr_redacted[..stderr_redacted.len().min(4096)];
-            if stderr_snippet.is_empty() {
-                format!("provider produced no JSON response ({exit_info}, empty stderr)")
-            } else {
-                format!(
-                    "provider produced no JSON response ({exit_info}). stderr: {stderr_snippet}"
-                )
-            }
-        })?;
+    let response = parsed_response.ok_or_else(|| {
+        let stderr_snippet = &stderr_redacted[..stderr_redacted.len().min(4096)];
+        if stderr_snippet.is_empty() {
+            format!("provider produced no JSON response ({exit_info}, empty stderr)")
+        } else {
+            format!("provider produced no JSON response ({exit_info}). stderr: {stderr_snippet}")
+        }
+    })?;
 
     if response.get("ok").and_then(|v| v.as_bool()) == Some(false) {
         let error = response["error"].as_str().unwrap_or("unknown error");
