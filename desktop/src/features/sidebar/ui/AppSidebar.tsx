@@ -1,6 +1,6 @@
 // biome-ignore format: keep compact to stay within file size limit
 import * as React from "react";
-import { FeatureGate } from "@/shared/features";
+import { useFeatureEnabled } from "@/shared/features";
 import { SidebarDndContext } from "@/features/sidebar/ui/SidebarDnd";
 
 import type { Community } from "@/features/communities/types";
@@ -462,6 +462,7 @@ export function AppSidebar({
       ),
     [channels, sortModeFor],
   );
+  const forumPreviewEnabled = useFeatureEnabled("forum");
   const directMessages = React.useMemo(
     () => channels.filter((channel) => channel.channelType === "dm"),
     [channels],
@@ -770,9 +771,11 @@ export function AppSidebar({
                       onLeaveChannel={requestLeaveChannel}
                     />
                   </SidebarDndContext>
-                  <FeatureGate feature="forum">
+                  {forumPreviewEnabled || forumChannels.length > 0 ? (
                     <ChannelGroupSection
-                      createLabel="New forum"
+                      createLabel={
+                        forumPreviewEnabled ? "New forum" : undefined
+                      }
                       hasUnread={unreadChannelIds.size > 0}
                       isCollapsed={collapsedGroups.forums}
                       isActiveChannel={selectedView === "channel"}
@@ -784,7 +787,11 @@ export function AppSidebar({
                       }
                       actionsTestId="section-actions-forums"
                       listTestId="forum-list"
-                      onCreateClick={() => openCreateDialog("forum")}
+                      onCreateClick={
+                        forumPreviewEnabled
+                          ? () => openCreateDialog("forum")
+                          : undefined
+                      }
                       onMarkAllRead={onMarkAllChannelsRead}
                       onMarkChannelRead={onMarkChannelRead}
                       onMarkChannelUnread={onMarkChannelUnread}
@@ -799,7 +806,7 @@ export function AppSidebar({
                       onUnmuteChannel={onUnmuteChannel}
                       onDeleteChannel={requestDeleteChannel}
                     />
-                  </FeatureGate>
+                  ) : null}
                   <SidebarSection
                     action={
                       <div className="absolute right-1 top-1/2 z-10 flex -translate-y-1/2 items-center gap-0.5">
