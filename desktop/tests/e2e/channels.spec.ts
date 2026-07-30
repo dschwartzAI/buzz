@@ -12,6 +12,7 @@ import {
   openCreateChannelDialog,
   openNewMessagePage,
 } from "../helpers/bridge";
+import { FEATURE_OVERRIDES_STORAGE_KEY } from "../helpers/features";
 
 const GENERAL_CHANNEL_ID = "9a1657ac-f7aa-5db0-b632-d8bbeb6dfb50";
 const AGENTS_CHANNEL_ID = "94a444a4-c0a3-5966-ab05-530c6ddc2301";
@@ -513,6 +514,23 @@ test("sidebar shows all channel types", async ({ page }) => {
   const dmList = page.getByTestId("dm-list");
   await expect(dmList).toContainText("alice-tyler");
   await expect(dmList).toContainText("bob-tyler");
+});
+
+test("sidebar keeps existing forums discoverable when forum preview is disabled", async ({
+  page,
+}) => {
+  await page.addInitScript((overridesKey) => {
+    window.localStorage.setItem(overridesKey, JSON.stringify({ forum: false }));
+  }, FEATURE_OVERRIDES_STORAGE_KEY);
+  await page.goto("/");
+
+  const forumList = page.getByTestId("forum-list");
+  await expect(forumList).toContainText("watercooler");
+  await expect(forumList).toContainText("announcements");
+  await page.getByTestId("section-actions-forums").click();
+  await expect(page.getByRole("menuitem", { name: "New forum" })).toHaveCount(
+    0,
+  );
 });
 
 test("shows presence in sidebar, DM header, and member list", async ({
