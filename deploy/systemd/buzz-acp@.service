@@ -6,15 +6,38 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-# Environment file: /etc/buzz-acp/%i.env  (or EnvironmentFile= override)
-EnvironmentFile=-/etc/buzz-acp/%i.env
-EnvironmentFile=-/etc/buzz-acp/%i
+# The instance name is the unprivileged Unix account running this agent.
+User=%i
+WorkingDirectory=~
+# Shared capabilities first; per-agent identity and harness settings second.
+EnvironmentFile=-/etc/buzz-acp/common.env
+EnvironmentFile=-/etc/buzz-acp/common-secrets.env
+EnvironmentFile=/etc/buzz-acp/%i.env
 # Binary on PATH after `cargo install` / release build install
 ExecStart=/usr/local/bin/buzz-acp
 Restart=on-failure
 RestartSec=3
-# Harden lightly — agents need homedir tools; tighten further per site
+TimeoutStopSec=30
 NoNewPrivileges=true
+UMask=0077
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=%h
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectProc=invisible
+ProcSubset=pid
+RestrictSUIDSGID=true
+LockPersonality=true
+RestrictRealtime=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+SystemCallArchitectures=native
 # Limit runaway forks; raise if your agent spawns heavy tool trees
 TasksMax=4096
 

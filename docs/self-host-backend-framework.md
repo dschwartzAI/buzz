@@ -133,16 +133,21 @@ Official relay supports invite mint/claim (`/api/invites`, `/invite/...`). Prefe
 
 Templates live in [`deploy/systemd/`](../deploy/systemd/):
 
-- `buzz-acp@.service` — instance unit (`buzz-acp@coder`)
-- `buzz-acp.env.example` — env skeleton
+- `buzz-acp@.service` — unprivileged instance unit (`buzz-acp@buzz-coder`)
+- `buzz-acp-common.env.example` — shared capabilities and team policy
+- `buzz-acp.env.example` — per-agent identity and harness
 
 ```bash
 sudo cp deploy/systemd/buzz-acp@.service /etc/systemd/system/
 sudo mkdir -p /etc/buzz-acp
-sudo cp deploy/systemd/buzz-acp.env.example /etc/buzz-acp/coder.env
-# edit keys + BUZZ_RELAY_URL=ws://HOST:3000
+sudo useradd --create-home --shell /usr/sbin/nologin buzz-coder
+sudo cp deploy/systemd/buzz-acp-common.env.example /etc/buzz-acp/common.env
+sudo cp deploy/systemd/team-instructions.md.example /etc/buzz-acp/team-instructions.md
+sudo cp deploy/systemd/buzz-acp.env.example /etc/buzz-acp/buzz-coder.env
+# edit common policy, key, harness, and BUZZ_RELAY_URL=ws://HOST:3000
+sudo chmod 600 /etc/buzz-acp/*.env
 sudo systemctl daemon-reload
-sudo systemctl enable --now buzz-acp@coder
+sudo systemctl enable --now buzz-acp@buzz-coder
 ```
 
 ### 5.3 Minimal env
@@ -151,8 +156,10 @@ sudo systemctl enable --now buzz-acp@coder
 BUZZ_PRIVATE_KEY=<agent>
 BUZZ_RELAY_URL=ws://HOST:3000
 BUZZ_ACP_AGENT_COMMAND=goose
+# Shared in /etc/buzz-acp/common.env:
 BUZZ_ACP_SUBSCRIBE=mentions
-BUZZ_ACP_RESPOND_TO=anyone   # or tighter
+BUZZ_ACP_RESPOND_TO=owner-only   # or allowlist for a trusted team
+BUZZ_ACP_TEAM_INSTRUCTIONS_FILE=/etc/buzz-acp/team-instructions.md
 ```
 
 See [buzz-acp README](../crates/buzz-acp/README.md) for pools, heartbeats, allowlists, and editor agents.

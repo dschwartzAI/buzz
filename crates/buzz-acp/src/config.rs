@@ -467,8 +467,20 @@ pub struct CliArgs {
     pub allowed_respond_to: Option<Vec<String>>,
 
     /// Team-owned instructions layered after `[System]` and before agent memory.
-    #[arg(long, env = "BUZZ_ACP_TEAM_INSTRUCTIONS")]
+    #[arg(
+        long,
+        env = "BUZZ_ACP_TEAM_INSTRUCTIONS",
+        conflicts_with = "team_instructions_file"
+    )]
     pub team_instructions: Option<String>,
+
+    /// Read team-owned instructions from a shared file.
+    #[arg(
+        long,
+        env = "BUZZ_ACP_TEAM_INSTRUCTIONS_FILE",
+        conflicts_with = "team_instructions"
+    )]
+    pub team_instructions_file: Option<PathBuf>,
 
     /// Publish encrypted ACP observer frames over the relay.
     #[arg(long, env = "BUZZ_ACP_RELAY_OBSERVER", default_value_t = false)]
@@ -845,6 +857,22 @@ impl Config {
             None
         };
 
+        let team_instructions = if let Some(text) = args.team_instructions {
+            Some(text)
+        } else if let Some(ref path) = args.team_instructions_file {
+            let content = std::fs::read_to_string(path)?;
+            if content.len() > 1_048_576 {
+                return Err(ConfigError::ConfigFile(format!(
+                    "team instructions file {} exceeds 1 MB limit ({} bytes)",
+                    path.display(),
+                    content.len()
+                )));
+            }
+            Some(content)
+        } else {
+            None
+        };
+
         let base_prompt_content = if args.no_base_prompt {
             None
         } else if let Some(ref path) = args.base_prompt_file {
@@ -1042,8 +1070,7 @@ impl Config {
             turn_liveness_secs,
             heartbeat_prompt,
             system_prompt,
-            team_instructions: args
-                .team_instructions
+            team_instructions: team_instructions
                 .as_deref()
                 .map(str::trim)
                 .filter(|value| !value.is_empty())
@@ -2659,6 +2686,45 @@ channels = "ALL"
     // A minimal valid private key for test use (secp256k1 scalar = 1).
     const TEST_PRIVATE_KEY: &str =
         "0000000000000000000000000000000000000000000000000000000000000001";
+
+    #[test]
+    fn team_instructions_file_full_path_loads_and_trims() {
+        let path =
+            std::env::temp_dir().join(format!("buzz-acp-team-instructions-{}", std::process::id()));
+        std::fs::write(&path, "\n  shared operating policy  \n")
+            .expect("write temporary team instructions");
+
+        let args = CliArgs::try_parse_from([
+            "buzz-acp",
+            "--private-key",
+            TEST_PRIVATE_KEY,
+            "--team-instructions-file",
+            path.to_str().expect("temporary path should be UTF-8"),
+        ])
+        .expect("clap should parse args");
+        let config = Config::from_args(args).expect("team instructions file should load");
+
+        assert_eq!(
+            config.team_instructions.as_deref(),
+            Some("shared operating policy")
+        );
+        std::fs::remove_file(path).expect("remove temporary team instructions");
+    }
+
+    #[test]
+    fn team_instructions_sources_conflict() {
+        let result = CliArgs::try_parse_from([
+            "buzz-acp",
+            "--private-key",
+            TEST_PRIVATE_KEY,
+            "--team-instructions",
+            "inline",
+            "--team-instructions-file",
+            "/tmp/team-instructions.md",
+        ]);
+
+        assert!(result.is_err(), "inline and file sources must conflict");
+    }
 
     #[test]
     fn allowed_respond_to_full_path_rejects_disallowed_mode() {

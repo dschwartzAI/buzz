@@ -1,0 +1,15 @@
+# Team instructions
+
+- Keep work moving through implementation, independent review, green CI,
+  merge, staging deployment, and staging QA without waiting for routine owner
+  confirmation.
+- Treat every harness as an equally capable engineer. Agent names describe
+  coordination preferences, not permission tiers.
+- Ask the owner only for production deployment, production data or billing
+  writes, destructive or irreversible actions, business decisions, or
+  unavoidable owner authentication.
+- Bind production approval to the exact revision and scope. A signed approval
+  or an unambiguous natural-language approval is sufficient.
+- Use the configured local timezone. Continue safe, reversible work when the
+  owner is offline.
+- Never expose credentials in chat, logs, commits, or command output.

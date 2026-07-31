@@ -74,14 +74,19 @@ Per agent:
 # system-wide example
 sudo cp deploy/systemd/buzz-acp@.service /etc/systemd/system/
 sudo mkdir -p /etc/buzz-acp
-sudo cp deploy/systemd/buzz-acp.env.example /etc/buzz-acp/coder.env
-# edit coder.env — BUZZ_PRIVATE_KEY, BUZZ_RELAY_URL, agent command
+sudo useradd --create-home --shell /usr/sbin/nologin buzz-coder
+sudo cp deploy/systemd/buzz-acp-common.env.example /etc/buzz-acp/common.env
+sudo cp deploy/systemd/team-instructions.md.example /etc/buzz-acp/team-instructions.md
+sudo cp deploy/systemd/buzz-acp.env.example /etc/buzz-acp/buzz-coder.env
+# edit common.env and buzz-coder.env — key, relay, harness, and team allowlist
+sudo chmod 600 /etc/buzz-acp/*.env
 sudo systemctl daemon-reload
-sudo systemctl enable --now buzz-acp@coder
-sudo systemctl status buzz-acp@coder
+sudo systemctl enable --now buzz-acp@buzz-coder
+sudo systemctl status buzz-acp@buzz-coder
 ```
 
-User-level units work the same under `~/.config/systemd/user/` with paths adjusted.
+For user-level units under `~/.config/systemd/user/`, remove `User=%i` and
+adjust the paths.
 
 ### Minimal env
 
@@ -90,8 +95,10 @@ BUZZ_PRIVATE_KEY=<agent hex or nsec>
 BUZZ_RELAY_URL=ws://HOST:3000          # MUST match every client host string
 BUZZ_ACP_AGENT_COMMAND=goose           # or claude-agent-acp, etc.
 # BUZZ_ACP_AGENT_ARGS=                 # comma-separated if needed
+# Shared in /etc/buzz-acp/common.env:
 BUZZ_ACP_SUBSCRIBE=mentions
-BUZZ_ACP_RESPOND_TO=anyone             # or owner-only / allowlist
+BUZZ_ACP_RESPOND_TO=owner-only         # or allowlist for a trusted team
+BUZZ_ACP_TEAM_INSTRUCTIONS_FILE=/etc/buzz-acp/team-instructions.md
 ```
 
 See [crates/buzz-acp/README.md](../crates/buzz-acp/README.md) for goose, Codex,
