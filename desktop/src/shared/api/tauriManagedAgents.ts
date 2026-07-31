@@ -22,6 +22,27 @@ export async function stopManagedAgent(pubkey: string): Promise<ManagedAgent> {
   return fromRawManagedAgent(response);
 }
 
+export async function attestManagedAgentOwner(
+  pubkey: string,
+  ttlSeconds: number,
+): Promise<ManagedAgent> {
+  const response = await invokeTauri<RawManagedAgent>(
+    "attest_managed_agent_owner",
+    { pubkey, ttlSeconds },
+  );
+  return fromRawManagedAgent(response);
+}
+
+export async function revokeManagedAgentOwnerAttestation(
+  pubkey: string,
+): Promise<ManagedAgent> {
+  const response = await invokeTauri<RawManagedAgent>(
+    "revoke_managed_agent_owner_attestation",
+    { pubkey },
+  );
+  return fromRawManagedAgent(response);
+}
+
 export async function setManagedAgentStartOnAppLaunch(
   pubkey: string,
   startOnAppLaunch: boolean,

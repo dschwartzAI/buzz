@@ -391,6 +391,7 @@ export type ManagedAgent = {
   autoRestartOnConfigChange: boolean;
   backend: ManagedAgentBackend;
   backendAgentId: string | null;
+  ownerAttestation: ManagedAgentOwnerAttestation;
   /** Who the agent should respond to. Maps to `buzz-acp --respond-to`. */
   respondTo: RespondToMode;
   /**
@@ -398,6 +399,14 @@ export type ManagedAgent = {
    * `"allowlist"`. Preserved across mode toggles.
    */
   respondToAllowlist: string[];
+};
+
+export type ManagedAgentOwnerAttestation = {
+  state: "missing" | "bounded" | "expired" | "unbounded" | "invalid";
+  ownerPubkey: string | null;
+  conditions: string | null;
+  expiresAt: number | null;
+  fingerprint: string | null;
 };
 
 /**

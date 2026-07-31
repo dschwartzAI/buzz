@@ -521,6 +521,7 @@ pub struct ManagedAgentSummary {
     pub env_vars: BTreeMap<String, String>,
     pub backend: BackendKind,
     pub backend_agent_id: Option<String>,
+    pub owner_attestation: ManagedAgentOwnerAttestation,
     pub status: String,
     pub pid: Option<u32>,
     pub created_at: String,
@@ -535,6 +536,20 @@ pub struct ManagedAgentSummary {
     pub log_path: String,
     pub respond_to: RespondTo,
     pub respond_to_allowlist: Vec<String>,
+}
+
+/// Redacted lifecycle state for a managed agent's NIP-OA owner attestation.
+///
+/// The raw credential never crosses IPC. `fingerprint` is a short SHA-256
+/// prefix suitable for confirming rotation without disclosing the capability.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub struct ManagedAgentOwnerAttestation {
+    pub state: String,
+    pub owner_pubkey: Option<String>,
+    pub conditions: Option<String>,
+    pub expires_at: Option<u64>,
+    pub fingerprint: Option<String>,
 }
 
 #[derive(Debug, Serialize)]

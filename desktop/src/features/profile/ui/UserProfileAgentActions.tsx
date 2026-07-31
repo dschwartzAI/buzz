@@ -6,6 +6,7 @@ import {
   Download,
   Power,
   Settings,
+  ShieldCheck,
   Trash2,
 } from "lucide-react";
 
@@ -40,6 +41,8 @@ export function UserProfileAgentSettingsMenu({
   onDelete,
   onDuplicatePersona,
   onExportPersona,
+  onAttestOwner,
+  onRevokeOwnerAttestation,
   onToggleAutoStart,
   personaActionKey,
 }: {
@@ -50,11 +53,14 @@ export function UserProfileAgentSettingsMenu({
   onDelete?: () => void;
   onDuplicatePersona?: () => void;
   onExportPersona?: () => void;
+  onAttestOwner?: (ttlSeconds: number) => Promise<boolean>;
+  onRevokeOwnerAttestation?: () => Promise<boolean>;
   onToggleAutoStart?: () => void;
   personaActionKey?: string;
 }) {
   const [archiveConfirmOpen, setArchiveConfirmOpen] = React.useState(false);
   const [deleteConfirmOpen, setDeleteConfirmOpen] = React.useState(false);
+  const [attestationOpen, setAttestationOpen] = React.useState(false);
   const actionKey = managedAgent?.pubkey ?? "persona-draft";
   const personaKey = personaActionKey ?? actionKey;
   const canToggleAutoStart =
@@ -63,6 +69,10 @@ export function UserProfileAgentSettingsMenu({
     onToggleAutoStart !== undefined;
   const autoStartSwitchId = `user-profile-agent-auto-start-${actionKey}`;
   const hasPrimaryActions = Boolean(onDuplicatePersona || onExportPersona);
+  const canManageOwnerAttestation =
+    managedAgent?.backend.type === "provider" &&
+    onAttestOwner !== undefined &&
+    onRevokeOwnerAttestation !== undefined;
   const hasArchiveAction =
     archiveActions?.canArchive === true &&
     archiveActions.isArchived !== undefined;
@@ -70,7 +80,10 @@ export function UserProfileAgentSettingsMenu({
     managedAgent !== undefined && onDelete !== undefined;
   const hasManageActions = hasArchiveAction || Boolean(onDelete);
   const hasActions =
-    canToggleAutoStart || hasPrimaryActions || hasManageActions;
+    canToggleAutoStart ||
+    hasPrimaryActions ||
+    hasManageActions ||
+    canManageOwnerAttestation;
 
   if (!hasActions) {
     return null;
@@ -142,7 +155,22 @@ export function UserProfileAgentSettingsMenu({
               Export
             </DropdownMenuItem>
           ) : null}
-          {hasManageActions && (canToggleAutoStart || hasPrimaryActions) ? (
+          {canManageOwnerAttestation ? (
+            <DropdownMenuItem
+              data-testid={`user-profile-agent-attestation-${actionKey}`}
+              disabled={isPending}
+              onSelect={() => setAttestationOpen(true)}
+            >
+              <ShieldCheck className="h-4 w-4" />
+              {managedAgent.ownerAttestation.state === "missing"
+                ? "Authorize owner actions"
+                : "Manage owner authorization"}
+            </DropdownMenuItem>
+          ) : null}
+          {hasManageActions &&
+          (canToggleAutoStart ||
+            hasPrimaryActions ||
+            canManageOwnerAttestation) ? (
             <DropdownMenuSeparator />
           ) : null}
           {hasArchiveAction && archiveActions ? (
@@ -210,6 +238,16 @@ export function UserProfileAgentSettingsMenu({
           open={deleteConfirmOpen}
         />
       ) : null}
+      {canManageOwnerAttestation ? (
+        <OwnerAttestationDialog
+          agent={managedAgent}
+          isPending={isPending}
+          onAttest={onAttestOwner}
+          onRevoke={onRevokeOwnerAttestation}
+          onOpenChange={setAttestationOpen}
+          open={attestationOpen}
+        />
+      ) : null}
     </>
   );
 }
@@ -226,6 +264,8 @@ export function UserProfileAgentSettingsMenuSlot({
   onDeletePersona,
   onDuplicatePersona,
   onExportPersona,
+  onAttestOwner,
+  onRevokeOwnerAttestation,
   onToggleAutoStart,
   personaActionKey,
   viewerIsOwner,
@@ -241,6 +281,8 @@ export function UserProfileAgentSettingsMenuSlot({
   onDeletePersona: () => void;
   onDuplicatePersona: () => void;
   onExportPersona: () => void;
+  onAttestOwner: (ttlSeconds: number) => Promise<boolean>;
+  onRevokeOwnerAttestation: () => Promise<boolean>;
   onToggleAutoStart: () => void;
   personaActionKey?: string;
   viewerIsOwner: boolean;
@@ -264,6 +306,8 @@ export function UserProfileAgentSettingsMenuSlot({
         {...sharedProps}
         managedAgent={managedAgent}
         onDelete={onDeleteAgent}
+        onAttestOwner={onAttestOwner}
+        onRevokeOwnerAttestation={onRevokeOwnerAttestation}
         onToggleAutoStart={onToggleAutoStart}
       />
     );
@@ -289,6 +333,118 @@ export function UserProfileAgentSettingsMenuSlot({
   }
 
   return null;
+}
+
+const ATTESTATION_TTLS = [
+  { label: "1 hour", seconds: 60 * 60 },
+  { label: "24 hours", seconds: 24 * 60 * 60 },
+  { label: "7 days", seconds: 7 * 24 * 60 * 60 },
+  { label: "30 days", seconds: 30 * 24 * 60 * 60 },
+] as const;
+
+function OwnerAttestationDialog({
+  agent,
+  isPending,
+  onAttest,
+  onOpenChange,
+  onRevoke,
+  open,
+}: {
+  agent: ManagedAgent;
+  isPending: boolean;
+  onAttest: (ttlSeconds: number) => Promise<boolean>;
+  onOpenChange: (open: boolean) => void;
+  onRevoke: () => Promise<boolean>;
+  open: boolean;
+}) {
+  const [ttlSeconds, setTtlSeconds] = React.useState(24 * 60 * 60);
+  const hasCredential =
+    agent.ownerAttestation.state === "bounded" ||
+    agent.ownerAttestation.state === "unbounded";
+  const expiry = agent.ownerAttestation.expiresAt
+    ? new Date(agent.ownerAttestation.expiresAt * 1000).toLocaleString()
+    : null;
+
+  return (
+    <AlertDialog onOpenChange={onOpenChange} open={open}>
+      <AlertDialogContent data-testid="owner-attestation-dialog">
+        <AlertDialogHeader>
+          <AlertDialogTitle>
+            Owner authorization for {agent.name}
+          </AlertDialogTitle>
+          <AlertDialogDescription>
+            This lets a compatible relay authenticate the agent as your
+            delegated NIP-OA identity. In Buzz Desktop, that enables
+            owner-reviewed agent drafts. It does not grant channel roles, relay
+            administration, deploy, database, Stripe, or migration authority.
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        <div className="space-y-3 text-sm">
+          <p className="text-muted-foreground">
+            Status:{" "}
+            <span className="font-medium text-foreground">
+              {agent.ownerAttestation.state}
+            </span>
+            {expiry ? ` · expires ${expiry}` : ""}
+            {agent.ownerAttestation.fingerprint
+              ? ` · fingerprint ${agent.ownerAttestation.fingerprint}`
+              : ""}
+          </p>
+          <label className="grid gap-1.5" htmlFor="owner-attestation-ttl">
+            <span className="font-medium">Authorization lifetime</span>
+            <select
+              className="h-9 rounded-md border border-input bg-background px-3"
+              disabled={isPending}
+              id="owner-attestation-ttl"
+              onChange={(event) => setTtlSeconds(Number(event.target.value))}
+              value={ttlSeconds}
+            >
+              {ATTESTATION_TTLS.map((option) => (
+                <option key={option.seconds} value={option.seconds}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <p className="text-xs text-muted-foreground">
+            Rotation replaces the provider&apos;s credential and restarts only
+            this agent. The provider removes it and restarts the agent at the
+            selected expiry. Relay-side cryptographic expiry also requires a
+            relay that enforces NIP-AA time bounds.
+          </p>
+        </div>
+        <AlertDialogFooter>
+          <AlertDialogCancel asChild>
+            <Button disabled={isPending} type="button" variant="outline">
+              Cancel
+            </Button>
+          </AlertDialogCancel>
+          {hasCredential ? (
+            <Button
+              disabled={isPending}
+              onClick={async () => {
+                if (await onRevoke()) onOpenChange(false);
+              }}
+              type="button"
+              variant="destructive"
+            >
+              Revoke
+            </Button>
+          ) : null}
+          <Button
+            data-testid="owner-attestation-confirm"
+            disabled={isPending}
+            onClick={async () => {
+              if (await onAttest(ttlSeconds)) onOpenChange(false);
+            }}
+            type="button"
+          >
+            {hasCredential ? "Rotate" : "Authorize"}
+          </Button>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
+  );
 }
 
 function AgentDeleteConfirmDialog({

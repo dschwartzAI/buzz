@@ -180,20 +180,32 @@ pub fn invoke_provider(
     stdout_buf.truncate(STDOUT_CAP);
 
     let stderr = String::from_utf8_lossy(&stderr_bytes);
-    let env_secrets = env_secrets_from_request(request);
-    let env_secret_refs: Vec<&str> = env_secrets.iter().map(String::as_str).collect();
-    let stderr_redacted = redact_secrets_with(&stderr, &env_secret_refs);
+    let request_secrets = secrets_from_request(request);
+    let request_secret_refs: Vec<&str> = request_secrets.iter().map(String::as_str).collect();
+    let stderr_redacted = redact_secrets_with(&stderr, &request_secret_refs);
 
     let exit_info = exit_status
         .code()
         .map(|c| format!("exit code {c}"))
         .unwrap_or_else(|| "killed by signal".to_string());
 
-    // Fail on non-zero exit regardless of stdout content. A provider that
-    // crashes mid-deploy may flush partial JSON before dying — trusting that
-    // output would be worse than surfacing the failure.
+    // Parse a structured provider error even when the provider exits non-zero.
+    // The response remains untrusted: a non-zero exit can never produce a
+    // successful result, but its redacted `error` field is more useful than
+    // "empty stderr" for providers that deliberately return JSON on stdout.
+    let stdout_str = String::from_utf8_lossy(&stdout_buf);
+    let parsed_response = stdout_str
+        .lines()
+        .find_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+        .or_else(|| serde_json::from_str(stdout_str.trim()).ok());
     let exited_ok = exit_status.success();
     if !exited_ok {
+        if let Some(response) = parsed_response.as_ref() {
+            if response.get("ok").and_then(|value| value.as_bool()) == Some(false) {
+                let error = response["error"].as_str().unwrap_or("unknown error");
+                return Err(redact_secrets_with(error, &request_secret_refs));
+            }
+        }
         let stderr_snippet = &stderr_redacted[..stderr_redacted.len().min(4096)];
         if stderr_snippet.is_empty() {
             return Err(format!("provider failed ({exit_info}, empty stderr)"));
@@ -207,25 +219,18 @@ pub fn invoke_provider(
     // Incremental JSON parse: try each line, then try the entire buffer.
     // Handles providers that emit JSON on a single line (common) as well as
     // providers that write JSON without a trailing newline.
-    let stdout_str = String::from_utf8_lossy(&stdout_buf);
-    let response: serde_json::Value = stdout_str
-        .lines()
-        .find_map(|line| serde_json::from_str(line).ok())
-        .or_else(|| serde_json::from_str(stdout_str.trim()).ok())
-        .ok_or_else(|| {
-            let stderr_snippet = &stderr_redacted[..stderr_redacted.len().min(4096)];
-            if stderr_snippet.is_empty() {
-                format!("provider produced no JSON response ({exit_info}, empty stderr)")
-            } else {
-                format!(
-                    "provider produced no JSON response ({exit_info}). stderr: {stderr_snippet}"
-                )
-            }
-        })?;
+    let response = parsed_response.ok_or_else(|| {
+        let stderr_snippet = &stderr_redacted[..stderr_redacted.len().min(4096)];
+        if stderr_snippet.is_empty() {
+            format!("provider produced no JSON response ({exit_info}, empty stderr)")
+        } else {
+            format!("provider produced no JSON response ({exit_info}). stderr: {stderr_snippet}")
+        }
+    })?;
 
     if response.get("ok").and_then(|v| v.as_bool()) == Some(false) {
         let error = response["error"].as_str().unwrap_or("unknown error");
-        return Err(redact_secrets_with(error, &env_secret_refs));
+        return Err(redact_secrets_with(error, &request_secret_refs));
     }
 
     Ok(response)
@@ -323,8 +328,8 @@ fn redact_secrets_with(s: &str, extras: &[&str]) -> String {
 /// to feed into [`redact_secrets_with`]. Returns an empty Vec if the
 /// request shape doesn't match, which is fine — falls back to the default
 /// prefix-based scrubbing.
-fn env_secrets_from_request(request: &serde_json::Value) -> Vec<String> {
-    request
+fn secrets_from_request(request: &serde_json::Value) -> Vec<String> {
+    let mut secrets: Vec<String> = request
         .get("agent")
         .and_then(|a| a.get("env_vars"))
         .and_then(|e| e.as_object())
@@ -335,7 +340,18 @@ fn env_secrets_from_request(request: &serde_json::Value) -> Vec<String> {
                 .map(String::from)
                 .collect()
         })
-        .unwrap_or_default()
+        .unwrap_or_default();
+    if let Some(auth_tag) = request.get("auth_tag").and_then(|value| value.as_str()) {
+        if !auth_tag.is_empty() {
+            secrets.push(auth_tag.to_string());
+            if let Ok(parts) = serde_json::from_str::<Vec<String>>(auth_tag) {
+                if let Some(signature) = parts.get(3).filter(|value| !value.is_empty()) {
+                    secrets.push(signature.clone());
+                }
+            }
+        }
+    }
+    secrets
 }
 
 /// Public-in-crate helper: redact every non-empty value from `env` (plus
@@ -374,6 +390,45 @@ pub fn provider_deploy(
         .as_str()
         .map(String::from)
         .ok_or_else(|| "deploy response missing agent_id".to_string())
+}
+
+/// Install, rotate, or remove an owner attestation for an already-deployed
+/// provider agent.
+///
+/// `auth_tag = Some(...)` installs or rotates the derived NIP-OA credential;
+/// `None` removes it. The owner private key never crosses this boundary.
+pub fn provider_update_auth(
+    binary: &Path,
+    agent_id: &str,
+    agent_pubkey: &str,
+    auth_tag: Option<&str>,
+    provider_config: &serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let request = serde_json::json!({
+        "op": "auth_update",
+        "request_id": uuid::Uuid::new_v4().to_string(),
+        "agent_id": agent_id,
+        "agent_pubkey": agent_pubkey,
+        "auth_tag": auth_tag,
+        "provider_config": provider_config,
+    });
+    let response = invoke_provider(binary, &request, Duration::from_secs(60))?;
+    if response.get("agent_id").and_then(|value| value.as_str()) != Some(agent_id) {
+        return Err("auth_update response agent_id mismatch".to_string());
+    }
+    let expected_state = if auth_tag.is_some() {
+        "present"
+    } else {
+        "absent"
+    };
+    if response
+        .get("credential_state")
+        .and_then(|value| value.as_str())
+        != Some(expected_state)
+    {
+        return Err("auth_update response credential_state mismatch".to_string());
+    }
+    Ok(response)
 }
 
 /// Validate provider_config: flat object, scalar values, no secret-like keys.
@@ -586,7 +641,7 @@ mod tests {
     }
 
     #[test]
-    fn env_secrets_from_request_extracts_string_values() {
+    fn secrets_from_request_extracts_string_values() {
         let req = serde_json::json!({
             "op": "deploy",
             "agent": {
@@ -597,19 +652,30 @@ mod tests {
                 },
             },
         });
-        let secrets = env_secrets_from_request(&req);
+        let secrets = secrets_from_request(&req);
         assert!(secrets.iter().any(|v| v == "sk-ant-test"));
         // Empty and non-string values are filtered out.
         assert_eq!(secrets.len(), 1);
     }
 
     #[test]
-    fn env_secrets_from_request_handles_missing_shape() {
-        assert!(env_secrets_from_request(&serde_json::json!({})).is_empty());
-        assert!(env_secrets_from_request(&serde_json::json!({"agent": {}})).is_empty());
-        assert!(
-            env_secrets_from_request(&serde_json::json!({"agent": {"env_vars": null}})).is_empty()
-        );
+    fn secrets_from_request_handles_missing_shape() {
+        assert!(secrets_from_request(&serde_json::json!({})).is_empty());
+        assert!(secrets_from_request(&serde_json::json!({"agent": {}})).is_empty());
+        assert!(secrets_from_request(&serde_json::json!({"agent": {"env_vars": null}})).is_empty());
+    }
+
+    #[test]
+    fn secrets_from_request_extracts_auth_tag_and_signature() {
+        let signature = "a".repeat(128);
+        let auth_tag =
+            serde_json::json!(["auth", "b".repeat(64), "created_at<2000000000", signature])
+                .to_string();
+        let request = serde_json::json!({"op": "auth_update", "auth_tag": auth_tag});
+        let secrets = secrets_from_request(&request);
+        assert_eq!(secrets.len(), 2);
+        assert_eq!(secrets[0], auth_tag);
+        assert_eq!(secrets[1], signature);
     }
 
     #[test]

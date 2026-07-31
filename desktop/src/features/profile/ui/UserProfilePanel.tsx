@@ -69,6 +69,7 @@ import {
 import { AgentConfigurationFocusedView } from "@/features/profile/ui/UserProfilePanelAgentDetails";
 import { UserProfileAgentSettingsMenuSlot } from "@/features/profile/ui/UserProfileAgentActions";
 import { useProfileAgentDeletion } from "@/features/profile/ui/UserProfilePanelDeletion";
+import { useOwnerAttestationActions } from "@/features/profile/ui/useOwnerAttestationActions";
 import { useProfileFieldBuckets } from "@/features/profile/ui/UserProfilePanelFields";
 import { submitProfilePersonaDialog } from "@/features/profile/ui/UserProfilePanelPersonaSubmit";
 import { UserProfilePersonaDialogs } from "@/features/profile/ui/UserProfilePersonaDialogs";
@@ -247,6 +248,11 @@ export function UserProfilePanel({
   const stopAgentMutation = useStopManagedAgentMutation();
   const deleteAgentMutation = useDeleteManagedAgentMutation();
   const startOnLaunchMutation = useSetManagedAgentStartOnAppLaunchMutation();
+  const {
+    isPending: isOwnerAttestationPending,
+    onAttestOwner: handleAttestOwner,
+    onRevokeOwnerAttestation: handleRevokeOwnerAttestation,
+  } = useOwnerAttestationActions(managedAgent);
   const createPersonaMutation = useCreatePersonaMutation();
   const updatePersonaMutation = useUpdatePersonaMutation();
   const deletePersonaMutation = useDeletePersonaMutation();
@@ -351,6 +357,7 @@ export function UserProfilePanel({
     stopAgentMutation.isPending ||
     deleteAgentMutation.isPending ||
     startOnLaunchMutation.isPending ||
+    isOwnerAttestationPending ||
     createPersonaMutation.isPending ||
     updatePersonaMutation.isPending ||
     deletePersonaMutation.isPending ||
@@ -726,10 +733,12 @@ export function UserProfilePanel({
       isAgentActionPending={isAgentActionPending}
       isBot={isBot}
       managedAgent={managedAgent}
+      onAttestOwner={handleAttestOwner}
       onDeleteAgent={handleDeleteAgent}
       onDeletePersona={handleDeletePersona}
       onDuplicatePersona={handleDuplicatePersona}
       onExportPersona={handleExportPersona}
+      onRevokeOwnerAttestation={handleRevokeOwnerAttestation}
       onToggleAutoStart={handleToggleAgentAutoStart}
       personaActionKey={resolvedPersona?.id}
       viewerIsOwner={viewerIsOwner}
