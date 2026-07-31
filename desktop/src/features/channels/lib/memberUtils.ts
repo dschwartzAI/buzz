@@ -12,12 +12,17 @@ export const roleOrder: Record<ChannelMember["role"], number> = {
 export function formatMemberName(
   member: ChannelMember,
   currentPubkey?: string,
+  profileDisplayName?: string | null,
 ) {
   if (currentPubkey && member.pubkey === currentPubkey) {
     return "You";
   }
 
-  return member.displayName ?? truncatePubkey(member.pubkey);
+  return (
+    member.displayName?.trim() ||
+    profileDisplayName?.trim() ||
+    truncatePubkey(member.pubkey)
+  );
 }
 
 export function compareMembersByRole(
