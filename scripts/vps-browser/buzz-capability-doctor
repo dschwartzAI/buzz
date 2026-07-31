@@ -1,0 +1,99 @@
+#!/usr/bin/env bash
+set -uo pipefail
+
+notify=false
+[[ "${1:-}" == '--notify' ]] && notify=true
+
+agent_user="$(id -un)"
+system_channel='c32a71b5-12cd-4c8e-808a-b32a32c39d8b'
+main_channel='5e17a3e7-9fe6-4aa3-8dca-5dc35b6c192a'
+required_failures=()
+
+check_buzz=false
+check_github=false
+check_cloudflare=false
+check_browser=false
+check_neon_staging=false
+check_stripe_test=false
+
+if /usr/bin/timeout 15 /usr/local/bin/buzz users get >/dev/null 2>&1; then
+  check_buzz=true
+else
+  required_failures+=(buzz)
+fi
+
+if /usr/bin/timeout 20 gh api repos/dschwartzAI/platform/commits/main --jq .sha >/dev/null 2>&1 \
+  && /usr/bin/timeout 20 gh api repos/dschwartzAI/buzz/commits/main --jq .sha >/dev/null 2>&1; then
+  check_github=true
+else
+  required_failures+=(github)
+fi
+
+if [[ -n "${CLOUDFLARE_API_TOKEN:-}" && -n "${CLOUDFLARE_ACCOUNT_ID:-}" ]]; then
+  cloudflare_result="$(/usr/bin/timeout 20 /usr/bin/node - <<'NODE' 2>/dev/null || true
+const account = process.env.CLOUDFLARE_ACCOUNT_ID;
+const token = process.env.CLOUDFLARE_API_TOKEN;
+const headers = {Authorization: `Bearer ${token}`};
+(async () => {
+  const verified = await fetch('https://api.cloudflare.com/client/v4/user/tokens/verify', {headers}).then(r => r.json());
+  const scripts = await fetch(`https://api.cloudflare.com/client/v4/accounts/${account}/workers/scripts`, {headers}).then(r => r.json());
+  const ids = Array.isArray(scripts.result) ? scripts.result.map(x => x.id) : [];
+  process.stdout.write(String(Boolean(
+    verified.success && scripts.success &&
+    ids.includes('shadcn-admin-cf-ai-staging') &&
+    ids.includes('shadcn-admin-cf-ai-production-v2')
+  )));
+})().catch(() => process.stdout.write('false'));
+NODE
+)"
+  [[ "$cloudflare_result" == true ]] && check_cloudflare=true
+fi
+if [[ "$check_cloudflare" != true ]]; then
+  required_failures+=(cloudflare)
+fi
+
+browser_result="$(/usr/bin/timeout 45 /usr/local/bin/buzz-browser-smoke \
+  https://staging.toolchat.ai 2>/dev/null || true)"
+if /usr/bin/jq -e '.ok == true and (.screenshot_sha256 | length == 64)' \
+  <<<"$browser_result" >/dev/null 2>&1; then
+  check_browser=true
+else
+  required_failures+=(browser)
+fi
+
+if [[ -n "${DATABASE_URL:-}" && "${DATABASE_URL}" == *'staging'* ]]; then
+  check_neon_staging=true
+fi
+
+if [[ -n "${STRIPE_SECRET_KEY:-}" && "${STRIPE_SECRET_KEY}" == sk_test_* ]]; then
+  check_stripe_test=true
+fi
+
+report="$(/usr/bin/jq -cn \
+  --arg agent "$agent_user" \
+  --argjson buzz "$check_buzz" \
+  --argjson github "$check_github" \
+  --argjson cloudflare "$check_cloudflare" \
+  --argjson browser "$check_browser" \
+  --argjson neon_staging "$check_neon_staging" \
+  --argjson stripe_test "$check_stripe_test" \
+  --argjson required_ok "$([[ ${#required_failures[@]} -eq 0 ]] && echo true || echo false)" \
+  --arg failures "$(IFS=,; echo "${required_failures[*]}")" \
+  '{profile:"trusted-engineer-v1",agent:$agent,required_ok:$required_ok,capabilities:{buzz:$buzz,github:$github,cloudflare:$cloudflare,browser:$browser,neon_staging:$neon_staging,stripe_test:$stripe_test},required_failures:(if $failures == "" then [] else ($failures|split(",")) end)}')"
+
+echo "$report"
+
+if $notify && [[ ${#required_failures[@]} -gt 0 ]] && [[ "$check_buzz" == true ]]; then
+  failure_message="Capability doctor failed for ${agent_user}: ${required_failures[*]}. Profile trusted-engineer-v1 is incomplete; inspect this service before assigning dependent work."
+  /usr/local/bin/buzz messages send \
+    --channel "$system_channel" \
+    --content "$failure_message" \
+    >/dev/null 2>&1 \
+    || /usr/local/bin/buzz messages send \
+      --channel "$main_channel" \
+      --content "$failure_message" \
+      >/dev/null 2>&1 \
+    || true
+fi
+
+[[ ${#required_failures[@]} -eq 0 ]]

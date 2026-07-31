@@ -1,0 +1,37 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+readonly runtime_root='/opt/buzz-playwright'
+readonly browser_root='/opt/buzz-playwright-browsers'
+readonly mcp_bin="${runtime_root}/node_modules/.bin/playwright-mcp"
+
+if [[ ! -x "$mcp_bin" ]]; then
+  echo "Playwright MCP is not installed at ${mcp_bin}" >&2
+  exit 127
+fi
+
+umask 077
+state_root="${XDG_STATE_HOME:-${HOME}/.local/state}/buzz-playwright"
+mkdir -p "$state_root"
+
+export PLAYWRIGHT_BROWSERS_PATH="$browser_root"
+
+args=(
+  --headless
+  --isolated
+  --sandbox
+  --image-responses allow
+  --output-dir "$state_root"
+  --output-max-size 104857600
+  --save-session
+  --timeout-action 10000
+  --timeout-navigation 90000
+  --viewport-size 1440x900
+)
+
+storage_state="${HOME}/.config/buzz-playwright/storage-state.json"
+if [[ -f "$storage_state" && -r "$storage_state" ]]; then
+  args+=(--storage-state "$storage_state")
+fi
+
+exec "$mcp_bin" "${args[@]}" "$@"

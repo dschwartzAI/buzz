@@ -1,0 +1,13 @@
+abi <abi/4.0>,
+include <tunables/global>
+
+# These paths are root-owned. The profiles only permit Chromium to create the
+# user namespace it needs for its own sandbox; they do not relax the global
+# Ubuntu user-namespace restriction.
+profile buzz-playwright-chrome /opt/buzz-playwright-browsers/chromium-*/chrome-linux64/chrome flags=(unconfined) {
+  userns,
+}
+
+profile buzz-playwright-headless-shell /opt/buzz-playwright-browsers/chromium_headless_shell-*/chrome-headless-shell-linux64/chrome-headless-shell flags=(unconfined) {
+  userns,
+}
