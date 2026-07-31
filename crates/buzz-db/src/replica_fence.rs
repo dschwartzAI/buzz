@@ -521,7 +521,10 @@ mod tests {
         assert!(fence.verified_through().is_none(), "must start closed");
         assert!(!fence.covers(Utc::now() - chrono::Duration::days(365)));
 
-        let ts = Utc::now();
+        // ReplicaFence stores timestamps as epoch microseconds. Normalize the
+        // fixture to that same precision so this assertion is platform-neutral.
+        let ts = DateTime::from_timestamp_micros(Utc::now().timestamp_micros())
+            .expect("current timestamp is representable at microsecond precision");
         fence.advance(ts);
         assert_eq!(fence.verified_through(), Some(ts));
         assert!(fence.covers(ts - chrono::Duration::seconds(1)));
