@@ -38,6 +38,7 @@ import { useAnchoredScroll } from "@/features/messages/ui/useAnchoredScroll";
 import { useComposerHeightPadding } from "@/features/messages/ui/useComposerHeightPadding";
 import { UpdateIndicator } from "@/features/settings/UpdateIndicator";
 import type { Channel, UserProfileSummary } from "@/shared/api/types";
+import { KIND_MESSAGE_ACTION_REQUEST } from "@/shared/constants/kinds";
 import { resolveMentionProps } from "@/shared/lib/resolveMentionNames";
 import { TopChromeInsetHeader } from "@/shared/layout/TopChromeInsetHeader";
 import { cn } from "@/shared/lib/cn";
@@ -417,7 +418,10 @@ function InboxMessageDetailPane({
         ? `Message in #${channelContextName}`
         : formatInboxTypeLabel(item);
   const contextChannelId = item.item.channelId;
-  const sourceEventId = selectedEventId ?? item.id;
+  const sourceEventId =
+    item.item.kind === KIND_MESSAGE_ACTION_REQUEST
+      ? (getThreadReference(item.item.tags).parentId ?? item.id)
+      : (selectedEventId ?? item.id);
   const contextThreadRootId = isThreadContext ? item.conversationId : null;
   const openContextLabel = isThreadContext
     ? "Open full thread"

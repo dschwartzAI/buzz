@@ -3205,6 +3205,7 @@ const mockFeedOverrides: RawHomeFeedResponse["feed"] = {
   activity: [],
   agent_activity: [],
 };
+const resolvedMockMessageActionIds = new Set<string>();
 
 let installed = false;
 let nextSocketId = 1;
@@ -6810,6 +6811,11 @@ async function handleGetFeed(
     ): RawFeedItem[] =>
       includeType(category)
         ? [...mockFeedOverrides[category], ...defaultFeed[category]]
+            .filter(
+              (item) =>
+                item.kind !== 40009 ||
+                !resolvedMockMessageActionIds.has(item.id),
+            )
             .sort((left, right) => right.created_at - left.created_at)
             .slice(0, limit)
         : [];
@@ -10813,6 +10819,12 @@ export function maybeInstallE2eTauriMocks() {
           payload as Parameters<typeof handleSendChannelMessage>[0],
           activeConfig,
         );
+      case "resolve_message_action": {
+        const { requestEventId } = payload as { requestEventId: string };
+        resolvedMockMessageActionIds.add(requestEventId);
+        window.dispatchEvent(new CustomEvent("buzz:e2e-home-feed-updated"));
+        return null;
+      }
       case "has_managed_agent_channel_message_marker": {
         const args = payload as {
           channelId: string;
