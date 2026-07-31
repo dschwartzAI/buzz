@@ -991,6 +991,7 @@ pub async fn edit_message(
     Ok(())
 }
 
+#[tauri::command]
 pub async fn delete_message(
     channel_id: String,
     event_id: String,
