@@ -10,9 +10,9 @@ use buzz_core::{
         KIND_GIT_PR_UPDATE, KIND_GIT_PULL_REQUEST, KIND_GIT_REPO_ANNOUNCEMENT,
         KIND_GIT_STATUS_CLOSED, KIND_GIT_STATUS_DRAFT, KIND_GIT_STATUS_MERGED,
         KIND_GIT_STATUS_OPEN, KIND_IA_ARCHIVE_REQUEST, KIND_IA_UNARCHIVE_REQUEST,
-        KIND_MODERATION_BAN, KIND_MODERATION_RESOLVE_REPORT, KIND_MODERATION_TIMEOUT,
-        KIND_MODERATION_UNBAN, KIND_MODERATION_UNTIMEOUT, KIND_PRESENCE_UPDATE, KIND_WORKFLOW_DEF,
-        KIND_WORKFLOW_TRIGGER,
+        KIND_MESSAGE_ACTION_REQUEST, KIND_MESSAGE_ACTION_RESOLVED, KIND_MODERATION_BAN,
+        KIND_MODERATION_RESOLVE_REPORT, KIND_MODERATION_TIMEOUT, KIND_MODERATION_UNBAN,
+        KIND_MODERATION_UNTIMEOUT, KIND_PRESENCE_UPDATE, KIND_WORKFLOW_DEF, KIND_WORKFLOW_TRIGGER,
     },
     observer::{
         content_looks_like_nip44, OBSERVER_AGENT_TAG, OBSERVER_FRAME_CONTROL, OBSERVER_FRAME_TAG,
@@ -235,6 +235,39 @@ pub fn build_message(
     }
     imeta_tags(media_tags, &mut tags)?;
     Ok(EventBuilder::new(Kind::Custom(9), content).tags(tags))
+}
+
+/// Build a message action request attached to an existing channel message.
+pub fn build_message_action_request(
+    channel_id: Uuid,
+    target_event_id: &str,
+    recipient_pubkey: &str,
+    note: &str,
+) -> Result<EventBuilder, SdkError> {
+    check_content(note, 4 * 1024)?;
+    let target = check_hex_exact(target_event_id, 64, "target_event_id")?;
+    let recipient = check_pubkey_hex(recipient_pubkey, "recipient_pubkey")?;
+    let tags = vec![
+        tag(&["h", &channel_id.to_string()])?,
+        tag(&["e", &target, "", "reply"])?,
+        tag(&["p", &recipient])?,
+    ];
+    Ok(EventBuilder::new(Kind::Custom(KIND_MESSAGE_ACTION_REQUEST as u16), note).tags(tags))
+}
+
+/// Build a recipient-authored resolution for a message action request.
+pub fn build_message_action_resolution(
+    channel_id: Uuid,
+    request_event_id: &str,
+    note: &str,
+) -> Result<EventBuilder, SdkError> {
+    check_content(note, 4 * 1024)?;
+    let request = check_hex_exact(request_event_id, 64, "request_event_id")?;
+    let tags = vec![
+        tag(&["h", &channel_id.to_string()])?,
+        tag(&["e", &request])?,
+    ];
+    Ok(EventBuilder::new(Kind::Custom(KIND_MESSAGE_ACTION_RESOLVED as u16), note).tags(tags))
 }
 
 /// Build an encrypted agent observer frame (kind 24200).
@@ -1846,6 +1879,43 @@ mod tests {
 
     fn uuid() -> Uuid {
         Uuid::new_v4()
+    }
+
+    #[test]
+    fn message_action_request_targets_message_and_recipient() {
+        let channel = uuid();
+        let target = event_id().to_hex();
+        let recipient = keys().public_key().to_hex();
+        let event = sign(
+            build_message_action_request(channel, &target, &recipient, "Approve launch").unwrap(),
+        );
+        let tags: Vec<Vec<String>> = event
+            .tags
+            .iter()
+            .map(|tag| tag.as_slice().to_vec())
+            .collect();
+        assert_eq!(event.kind, Kind::Custom(KIND_MESSAGE_ACTION_REQUEST as u16));
+        assert!(tags.contains(&vec!["h".into(), channel.to_string()]));
+        assert!(tags.contains(&vec!["e".into(), target, "".into(), "reply".into()]));
+        assert!(tags.contains(&vec!["p".into(), recipient]));
+    }
+
+    #[test]
+    fn message_action_resolution_references_request() {
+        let channel = uuid();
+        let request = event_id().to_hex();
+        let event = sign(build_message_action_resolution(channel, &request, "Done").unwrap());
+        let tags: Vec<Vec<String>> = event
+            .tags
+            .iter()
+            .map(|tag| tag.as_slice().to_vec())
+            .collect();
+        assert_eq!(
+            event.kind,
+            Kind::Custom(KIND_MESSAGE_ACTION_RESOLVED as u16)
+        );
+        assert!(tags.contains(&vec!["h".into(), channel.to_string()]));
+        assert!(tags.contains(&vec!["e".into(), request]));
     }
 
     fn tag_values(event: &nostr::Event, key: &str) -> Vec<String> {

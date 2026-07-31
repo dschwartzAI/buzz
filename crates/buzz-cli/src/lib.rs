@@ -370,6 +370,33 @@ pub enum MessagesCmd {
         #[arg(long = "file")]
         files: Vec<String>,
     },
+    /// Mark a channel message as needing action from a recipient.
+    NeedsAction {
+        /// Channel UUID containing the target message
+        #[arg(long)]
+        channel: String,
+        /// Target message event ID
+        #[arg(long)]
+        event: String,
+        /// Recipient public key (hex)
+        #[arg(long)]
+        assignee: String,
+        /// Optional action note
+        #[arg(long, default_value = "")]
+        note: String,
+    },
+    /// Resolve a message action request.
+    ResolveAction {
+        /// Channel UUID containing the request
+        #[arg(long)]
+        channel: String,
+        /// Action request event ID
+        #[arg(long)]
+        request: String,
+        /// Optional resolution note
+        #[arg(long, default_value = "")]
+        note: String,
+    },
     /// Send a code diff / patch to a channel
     SendDiff {
         /// Channel UUID
@@ -1884,6 +1911,8 @@ mod tests {
                 "delete",
                 "edit",
                 "get",
+                "needs-action",
+                "resolve-action",
                 "search",
                 "send",
                 "send-diff",
@@ -2003,7 +2032,7 @@ mod tests {
             ("feed", 1),
             ("issues", 4),
             ("media", 1),
-            ("messages", 8),
+            ("messages", 10),
             ("pack", 2),
             ("patches", 4),
             ("pr", 5),

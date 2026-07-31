@@ -751,6 +751,75 @@ pub async fn cmd_vote_on_post(
     Ok(())
 }
 
+pub async fn cmd_mark_needs_action(
+    client: &BuzzClient,
+    channel: &str,
+    event_id: &str,
+    assignee: &str,
+    note: &str,
+) -> Result<(), CliError> {
+    validate_hex64(event_id)?;
+    let channel_uuid = parse_uuid(channel)?;
+    let actual_channel = resolve_channel_id(client, event_id).await?;
+    if actual_channel != channel_uuid {
+        return Err(CliError::Usage(
+            "--channel does not match the target message".into(),
+        ));
+    }
+    let builder = buzz_sdk::build_message_action_request(channel_uuid, event_id, assignee, note)
+        .map_err(|e| CliError::Other(format!("build_message_action_request failed: {e}")))?;
+    let response = client.submit_event(client.sign_event(builder)?).await?;
+    println!("{}", normalize_write_response(&response));
+    Ok(())
+}
+
+pub async fn cmd_resolve_needs_action(
+    client: &BuzzClient,
+    channel: &str,
+    request_id: &str,
+    note: &str,
+) -> Result<(), CliError> {
+    validate_hex64(request_id)?;
+    let channel_uuid = parse_uuid(channel)?;
+    let filter = serde_json::json!({ "ids": [request_id], "kinds": [buzz_sdk::kind::KIND_MESSAGE_ACTION_REQUEST] });
+    let raw = client.query(&filter).await?;
+    let events: Vec<serde_json::Value> = serde_json::from_str(&raw)
+        .map_err(|e| CliError::Other(format!("failed to parse action request: {e}")))?;
+    let request = events
+        .first()
+        .ok_or_else(|| CliError::Other(format!("action request {request_id} not found")))?;
+    let tags = request
+        .get("tags")
+        .and_then(|value| value.as_array())
+        .ok_or_else(|| CliError::Other("action request missing tags".into()))?;
+    let me = client.keys().public_key().to_hex();
+    let assigned_to_me = tags.iter().any(|tag| {
+        tag.as_array().is_some_and(|parts| {
+            parts.first().and_then(|part| part.as_str()) == Some("p")
+                && parts
+                    .get(1)
+                    .and_then(|part| part.as_str())
+                    .is_some_and(|pubkey| pubkey.eq_ignore_ascii_case(&me))
+        })
+    });
+    if !assigned_to_me {
+        return Err(CliError::Usage(
+            "only the assigned recipient can resolve this action".into(),
+        ));
+    }
+    let actual_channel = resolve_channel_id(client, request_id).await?;
+    if actual_channel != channel_uuid {
+        return Err(CliError::Usage(
+            "--channel does not match the action request".into(),
+        ));
+    }
+    let builder = buzz_sdk::build_message_action_resolution(channel_uuid, request_id, note)
+        .map_err(|e| CliError::Other(format!("build_message_action_resolution failed: {e}")))?;
+    let response = client.submit_event(client.sign_event(builder)?).await?;
+    println!("{}", normalize_write_response(&response));
+    Ok(())
+}
+
 pub async fn dispatch(
     cmd: crate::MessagesCmd,
     client: &BuzzClient,
@@ -779,6 +848,17 @@ pub async fn dispatch(
             )
             .await
         }
+        MessagesCmd::NeedsAction {
+            channel,
+            event,
+            assignee,
+            note,
+        } => cmd_mark_needs_action(client, &channel, &event, &assignee, &note).await,
+        MessagesCmd::ResolveAction {
+            channel,
+            request,
+            note,
+        } => cmd_resolve_needs_action(client, &channel, &request, &note).await,
         MessagesCmd::SendDiff {
             channel,
             diff,

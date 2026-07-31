@@ -5,6 +5,7 @@ import {
   ExternalLink,
   FileText,
   MailOpen,
+  Check,
 } from "lucide-react";
 import * as React from "react";
 
@@ -29,6 +30,7 @@ import {
   useReminderSources,
 } from "@/features/reminders/ui/RemindersPanel";
 import { TopChromeInsetHeader } from "@/shared/layout/TopChromeInsetHeader";
+import { KIND_MESSAGE_ACTION_REQUEST } from "@/shared/constants/kinds";
 import { cn } from "@/shared/lib/cn";
 import { normalizePubkey } from "@/shared/lib/pubkey";
 import {
@@ -198,6 +200,7 @@ type InboxListPaneProps = {
   onMarkUnread: (itemId: string) => void;
   onOpenDirect: (item: InboxItem) => void;
   onRemindLater: (item: InboxItem) => void;
+  onResolveAction: (item: InboxItem) => void;
   onSelect: (itemId: string) => void;
   onSelectDraft: (draftKey: string) => void;
   onSelectReminder: (reminderId: string) => void;
@@ -226,6 +229,7 @@ export function InboxListPane({
   onMarkUnread,
   onOpenDirect,
   onRemindLater,
+  onResolveAction,
   onSelect,
   onSelectDraft,
   onSelectReminder,
@@ -433,6 +437,14 @@ export function InboxListPane({
         </div>
 
         <div className="pointer-events-none absolute right-3 top-2 z-10 flex items-center gap-0.5 rounded-full bg-[var(--inbox-row-highlight-bg)] p-1 opacity-0 transition-opacity duration-150 ease-out group-hover/inbox-item:pointer-events-auto group-hover/inbox-item:opacity-100 group-focus-within/inbox-item:pointer-events-auto group-focus-within/inbox-item:opacity-100">
+          {item.item.kind === KIND_MESSAGE_ACTION_REQUEST ? (
+            <InboxRowActionButton
+              label="Resolve action"
+              onClick={() => onResolveAction(item)}
+            >
+              <Check className="!h-4 !w-4" />
+            </InboxRowActionButton>
+          ) : null}
           {isDone ? (
             <InboxRowActionButton
               label="Mark unread"
@@ -488,6 +500,12 @@ export function InboxListPane({
               Mark as read
             </ContextMenuItem>
           )}
+          {item.item.kind === KIND_MESSAGE_ACTION_REQUEST ? (
+            <ContextMenuItem onClick={() => onResolveAction(item)}>
+              <Check className="h-4 w-4" />
+              Resolve action
+            </ContextMenuItem>
+          ) : null}
           <ContextMenuSeparator />
           <ContextMenuItem
             disabled={!hasChannelTarget}

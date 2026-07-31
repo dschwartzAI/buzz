@@ -1,7 +1,10 @@
 use nostr::{Event, EventId, Keys, PublicKey};
 use tauri::{AppHandle, State};
 
+mod action;
 mod forum;
+
+pub use action::resolve_message_action;
 
 use forum::{forum_message_from_event, forum_reply_from_event};
 
@@ -88,9 +91,9 @@ pub async fn get_feed(
     if let Some(s) = since {
         mention_filter["since"] = serde_json::json!(s);
     }
-    // Needs-action: workflow approval-request events sent to me.
+    // Needs-action: open message actions, workflow approvals, and reminders sent to me.
     let mut approval_filter = serde_json::json!({
-        "kinds": [46010, 46011, 46012],
+        "kinds": [40007, buzz_core_pkg::kind::KIND_MESSAGE_ACTION_REQUEST, 46010],
         "#p": [my_pubkey],
         "limit": 20,
     });
@@ -117,9 +120,41 @@ pub async fn get_feed(
         .iter()
         .map(|ev| feed_item_from_event(ev, "mentions"))
         .collect();
+    let action_request_ids: Vec<String> = approval_events
+        .iter()
+        .filter(|event| {
+            event.kind.as_u16() as u32 == buzz_core_pkg::kind::KIND_MESSAGE_ACTION_REQUEST
+        })
+        .map(|event| event.id.to_hex())
+        .collect();
+    let resolved_ids = if action_request_ids.is_empty() {
+        std::collections::HashSet::new()
+    } else {
+        query_relay(
+            &state,
+            &[serde_json::json!({
+                "kinds": [buzz_core_pkg::kind::KIND_MESSAGE_ACTION_RESOLVED],
+                "authors": [my_pubkey],
+                "#e": action_request_ids,
+                "limit": 100,
+            })],
+        )
+        .await
+        .unwrap_or_default()
+        .iter()
+        .flat_map(|event| event.tags.iter())
+        .filter_map(|tag| {
+            let values = tag.as_slice();
+            (values.first().map(String::as_str) == Some("e"))
+                .then(|| values.get(1).cloned())
+                .flatten()
+        })
+        .collect::<std::collections::HashSet<_>>()
+    };
     let needs_action: Vec<FeedItemInfo> = approval_events
         .iter()
-        .map(|ev| feed_item_from_event(ev, "needs_action"))
+        .filter(|event| !resolved_ids.contains(&event.id.to_hex()))
+        .map(|event| feed_item_from_event(event, "needs_action"))
         .collect();
 
     let total = (mentions.len() + needs_action.len()) as u64;
@@ -956,7 +991,6 @@ pub async fn edit_message(
     Ok(())
 }
 
-#[tauri::command]
 pub async fn delete_message(
     channel_id: String,
     event_id: String,
