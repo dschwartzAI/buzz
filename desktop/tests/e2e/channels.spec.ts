@@ -2966,6 +2966,105 @@ test("home inbox thread reply mention carries threadRootId to the channel", asyn
   await expect(page.getByTestId("home-inbox-list")).toHaveCount(0);
 });
 
+test("message action opens its source thread and leaves Needs Action when resolved", async ({
+  page,
+}) => {
+  const actionRequestId = "a".repeat(64);
+  const sourceMessageId = "b".repeat(64);
+  await page.goto("/");
+  await expect(page.getByTestId("home-inbox-list")).toBeVisible();
+  await page.waitForFunction(
+    () =>
+      typeof (window as MockFeedWindow).__BUZZ_E2E_PUSH_MOCK_FEED_ITEM__ ===
+      "function",
+  );
+
+  await page.evaluate(
+    ({ actionId, channelId, currentPubkey, senderPubkey, sourceId }) => {
+      const pushFeedItem = (window as MockFeedWindow)
+        .__BUZZ_E2E_PUSH_MOCK_FEED_ITEM__;
+      if (!pushFeedItem) throw new Error("Mock feed helper is not installed.");
+      pushFeedItem({
+        category: "needs_action",
+        channel_id: channelId,
+        channel_name: "general",
+        channel_type: "stream",
+        content: "Review the message-level Needs Action flow",
+        created_at: Math.floor(Date.now() / 1_000) + 120,
+        id: actionId,
+        kind: 40009,
+        pubkey: senderPubkey,
+        tags: [
+          ["h", channelId],
+          ["e", sourceId, "", "reply"],
+          ["p", currentPubkey],
+        ],
+      });
+    },
+    {
+      actionId: actionRequestId,
+      channelId: GENERAL_CHANNEL_ID,
+      currentPubkey: TEST_IDENTITIES.tyler.pubkey,
+      senderPubkey: TEST_IDENTITIES.alice.pubkey,
+      sourceId: sourceMessageId,
+    },
+  );
+
+  const row = page.getByTestId(`home-inbox-item-${actionRequestId}`);
+  await expect(row).toBeVisible();
+  await row.click();
+
+  const detail = page.getByTestId("home-inbox-detail");
+  await expect(detail).toContainText(
+    "Review the message-level Needs Action flow",
+  );
+  await detail.getByRole("button", { name: "Open full thread" }).click();
+
+  await expect(page).toHaveURL(
+    new RegExp(`#/channels/${GENERAL_CHANNEL_ID}\\?`),
+  );
+  await expect(page).toHaveURL(new RegExp(`messageId=${sourceMessageId}`));
+  await expect(page).toHaveURL(new RegExp(`threadRootId=${sourceMessageId}`));
+
+  await page.goBack();
+  await expect(row).toBeVisible();
+  await row.hover();
+  await row.getByRole("button", { name: "Resolve action" }).click();
+  await expect(row).toHaveCount(0);
+
+  await expect
+    .poll(() =>
+      page.evaluate(
+        ({ actionId, channelId }) =>
+          (
+            window as Window & {
+              __BUZZ_E2E_COMMAND_LOG__?: Array<{
+                command: string;
+                payload: unknown;
+              }>;
+            }
+          ).__BUZZ_E2E_COMMAND_LOG__?.some(
+            (entry) =>
+              entry.command === "resolve_message_action" &&
+              (
+                entry.payload as {
+                  channelId?: string;
+                  requestEventId?: string;
+                }
+              )?.channelId === channelId &&
+              (
+                entry.payload as {
+                  channelId?: string;
+                  requestEventId?: string;
+                }
+              )?.requestEventId === actionId,
+          ) ?? false,
+        { actionId: actionRequestId, channelId: GENERAL_CHANNEL_ID },
+      ),
+    )
+    .toBe(true);
+});
+
 test("Inbox filter changes preserve valid detail and directly select a replacement", async ({
   page,
 }) => {
