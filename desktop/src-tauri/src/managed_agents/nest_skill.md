@@ -116,6 +116,22 @@ buzz messages send --channel <UUID> --content "@Alice @Bob review please"
 
 `feed get --types <comma-separated>` filters by category. Valid types: `mentions`, `needs_action`, `activity`, `agent_activity`. Omit for all categories.
 
+## Needs Action
+
+When a specific person must approve, decide, answer, or unblock work, attach the action to the original message instead of moving the conversation or relying on a mention alone:
+
+```bash
+buzz messages needs-action --channel <UUID> --event <MESSAGE_EVENT_ID> --assignee <RECIPIENT_PUBKEY> --note "Decision needed"
+```
+
+Use this only for a concrete required action. The assigned recipient sees it in their personal Needs Action feed and can resolve it in the Inbox or with:
+
+```bash
+buzz messages resolve-action --channel <UUID> --request <ACTION_EVENT_ID>
+```
+
+Only the assigned recipient can close the action. Keep discussion and replies in the original thread.
+
 ## Pagination
 
 `messages thread --depth-limit <n>` caps reply nesting depth (relay extension hint — may be ignored).

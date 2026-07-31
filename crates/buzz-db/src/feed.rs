@@ -2,7 +2,7 @@
 //!
 //! Aggregates three categories of data:
 //! - **Mentions**: Events where the user's pubkey appears in a `p` tag.
-//! - **Needs Action**: Approval requests (kind 46010) and reminders (kind 40007) tagged to the user.
+//! - **Needs Action**: Open message actions, approval requests, and reminders tagged to the user.
 //! - **Activity**: Recent events from channels the user can access.
 //!
 //! ## Performance characteristics
@@ -36,8 +36,9 @@ use uuid::Uuid;
 use buzz_core::kind::{
     KIND_FORUM_COMMENT, KIND_FORUM_POST, KIND_GIT_ISSUE, KIND_GIT_PR_UPDATE, KIND_GIT_PULL_REQUEST,
     KIND_GIT_STATUS_CLOSED, KIND_GIT_STATUS_DRAFT, KIND_GIT_STATUS_MERGED, KIND_GIT_STATUS_OPEN,
-    KIND_JOB_PROGRESS, KIND_JOB_REQUEST, KIND_JOB_RESULT, KIND_STREAM_MESSAGE,
-    KIND_STREAM_MESSAGE_V2, KIND_STREAM_REMINDER, KIND_TEXT_NOTE, KIND_WORKFLOW_APPROVAL_REQUESTED,
+    KIND_JOB_PROGRESS, KIND_JOB_REQUEST, KIND_JOB_RESULT, KIND_MESSAGE_ACTION_REQUEST,
+    KIND_MESSAGE_ACTION_RESOLVED, KIND_STREAM_MESSAGE, KIND_STREAM_MESSAGE_V2,
+    KIND_STREAM_REMINDER, KIND_TEXT_NOTE, KIND_WORKFLOW_APPROVAL_REQUESTED,
 };
 use buzz_core::{CommunityId, StoredEvent};
 
@@ -165,7 +166,10 @@ fn build_needs_action_query(
     qb.push(" AND m.pubkey_hex = ").push_bind(pubkey_hex);
     qb.push(" AND e.deleted_at IS NULL");
     qb.push(format!(
-        " AND e.kind IN ({KIND_WORKFLOW_APPROVAL_REQUESTED}, {KIND_STREAM_REMINDER})"
+        " AND e.kind IN ({KIND_WORKFLOW_APPROVAL_REQUESTED}, {KIND_STREAM_REMINDER}, {KIND_MESSAGE_ACTION_REQUEST})"
+    ));
+    qb.push(format!(
+        " AND (e.kind <> {KIND_MESSAGE_ACTION_REQUEST} OR NOT EXISTS (SELECT 1 FROM events resolution WHERE resolution.community_id = e.community_id AND resolution.kind = {KIND_MESSAGE_ACTION_RESOLVED} AND resolution.deleted_at IS NULL AND encode(resolution.pubkey, 'hex') = m.pubkey_hex AND resolution.tags @> jsonb_build_array(jsonb_build_array('e', encode(e.id, 'hex')))))"
     ));
     push_visible_channel_filter(&mut qb, "e.channel_id", accessible_channel_ids);
     if let Some(s) = since {
@@ -177,6 +181,7 @@ fn build_needs_action_query(
 }
 
 /// Find events that require action from the given pubkey:
+/// - [`KIND_MESSAGE_ACTION_REQUEST`] (open message action assigned to the user)
 /// - [`KIND_WORKFLOW_APPROVAL_REQUESTED`] (workflow approval requested, tagged with user pubkey)
 /// - [`KIND_STREAM_REMINDER`] (reminder, tagged with user pubkey)
 ///
@@ -591,9 +596,19 @@ mod tests {
     }
 
     #[test]
-    fn needs_action_query_includes_approval_and_reminder_kinds() {
-        use buzz_core::kind::{KIND_STREAM_REMINDER, KIND_WORKFLOW_APPROVAL_REQUESTED};
-        let needs_action_kinds: &[u32] = &[KIND_WORKFLOW_APPROVAL_REQUESTED, KIND_STREAM_REMINDER];
+    fn needs_action_query_includes_open_action_approval_and_reminder_kinds() {
+        use buzz_core::kind::{
+            KIND_MESSAGE_ACTION_REQUEST, KIND_STREAM_REMINDER, KIND_WORKFLOW_APPROVAL_REQUESTED,
+        };
+        let needs_action_kinds: &[u32] = &[
+            KIND_MESSAGE_ACTION_REQUEST,
+            KIND_WORKFLOW_APPROVAL_REQUESTED,
+            KIND_STREAM_REMINDER,
+        ];
+        assert!(
+            needs_action_kinds.contains(&KIND_MESSAGE_ACTION_REQUEST),
+            "open message action kind must be in needs_action"
+        );
 
         assert!(
             needs_action_kinds.contains(&KIND_WORKFLOW_APPROVAL_REQUESTED),

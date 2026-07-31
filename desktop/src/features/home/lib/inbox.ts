@@ -171,6 +171,8 @@ function feedHeadline(item: FeedItem, groupItems: readonly FeedItem[] = []) {
   switch (item.kind) {
     case 40007:
       return "Reminder";
+    case 40009:
+      return "Action requested";
     case 43001:
       return "Job requested";
     case 43002:

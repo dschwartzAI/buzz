@@ -58,9 +58,16 @@ import { useUsersBatchQuery } from "@/features/profile/hooks";
 import { useRelaySelfQuery } from "@/features/moderation/hooks";
 import { resolveUserLabel } from "@/features/profile/lib/identity";
 import { useRemindLater } from "@/features/reminders/ui/RemindMeLaterProvider";
-import { deleteMessage, sendChannelMessage } from "@/shared/api/tauri";
+import {
+  deleteMessage,
+  resolveMessageAction,
+  sendChannelMessage,
+} from "@/shared/api/tauri";
 import type { HomeFeedResponse } from "@/shared/api/types";
-import { KIND_REACTION } from "@/shared/constants/kinds";
+import {
+  KIND_MESSAGE_ACTION_REQUEST,
+  KIND_REACTION,
+} from "@/shared/constants/kinds";
 import { topChromeInset } from "@/shared/layout/chromeLayout";
 import { cn } from "@/shared/lib/cn";
 import { normalizePubkey } from "@/shared/lib/pubkey";
@@ -652,11 +659,24 @@ export function HomeView({
                 if (!channelId) {
                   return;
                 }
-                onOpenContext(
-                  channelId,
-                  item.id,
-                  getThreadReference(item.item.tags).rootId,
-                );
+                const thread = getThreadReference(item.item.tags);
+                const messageId =
+                  item.item.kind === KIND_MESSAGE_ACTION_REQUEST
+                    ? (thread.parentId ?? item.id)
+                    : item.id;
+                onOpenContext(channelId, messageId, thread.rootId);
+              }}
+              onResolveAction={(item) => {
+                const channelId = item.item.channelId;
+                if (
+                  !channelId ||
+                  item.item.kind !== KIND_MESSAGE_ACTION_REQUEST
+                )
+                  return;
+                void resolveMessageAction(channelId, item.item.id).then(() => {
+                  markItemRead(item.id);
+                  onRefresh();
+                });
               }}
               onRemindLater={(item) => {
                 const channelId = item.item.channelId;
