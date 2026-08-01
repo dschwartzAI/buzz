@@ -114,6 +114,8 @@ All configuration is via environment variables (or CLI flags — every env var h
 | `BUZZ_ACP_IDLE_TIMEOUT` | no | `620` | Idle timeout: max seconds of silence before cancelling a turn. Resets on any agent stdout activity. |
 | `BUZZ_ACP_MAX_TURN_DURATION` | no | `7200` | Absolute wall-clock cap per turn (safety valve). |
 | `BUZZ_API_TOKEN` | no | — | API token (required if relay enforces token auth). |
+| `BUZZ_ACP_TEAM_INSTRUCTIONS` | no | — | Team-owned instructions layered after the system prompt and before agent memory. |
+| `BUZZ_ACP_TEAM_INSTRUCTIONS_FILE` | no | — | Read team-owned instructions from a shared file. Conflicts with `BUZZ_ACP_TEAM_INSTRUCTIONS`. |
 
 **Note:** `BUZZ_ACP_AGENT_ARGS` splits on commas. For args with values, use: `-c,key="value"`.
 
@@ -194,6 +196,10 @@ buzz-acp --agents 4
 ```bash
 buzz-acp --agents 2 --heartbeat-interval 300
 ```
+
+For multiple identities on one host, configure a heartbeat on only the agent
+responsible for proactively scanning shared work. Mentions continue to wake all
+other identities normally.
 
 **Custom heartbeat prompt:**
 ```bash
@@ -338,3 +344,12 @@ See the [root TESTING.md](../../TESTING.md) for the full integration testing gui
 ## License
 
 Apache-2.0
+
+## Always-on agents (any client)
+
+For **server-side `buzz-acp`** with Desktop, web, mobile, or CLI as thin clients
+(agents stay up when devices sleep or disconnect), see:
+
+- **Full framework:** [docs/self-host-backend-framework.md](../../docs/self-host-backend-framework.md)
+- **Quick start:** [docs/self-host-always-on-agents.md](../../docs/self-host-always-on-agents.md)
+- **systemd:** [deploy/systemd/](../../deploy/systemd/)
