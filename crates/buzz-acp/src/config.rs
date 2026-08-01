@@ -4,7 +4,9 @@
 //! Config file (TOML) for complex subscription rules.
 
 use std::collections::{HashMap, HashSet};
-use std::path::PathBuf;
+use std::fs::{File, OpenOptions};
+use std::io::Read;
+use std::path::{Path, PathBuf};
 
 use clap::Parser;
 use clap::ValueEnum;
@@ -35,6 +37,8 @@ pub(crate) const DEFAULT_MAX_TURN_DURATION_SECS: u64 = 7200;
 /// deadline (`max_turn_duration + IN_FLIGHT_DEADLINE_BUFFER_SECS`).
 pub(crate) const MAX_TURN_DURATION_CEILING_SECS: u64 = 604_800;
 
+const MAX_TEAM_INSTRUCTIONS_BYTES: u64 = 1_048_576;
+
 #[derive(Debug, Error)]
 pub enum ConfigError {
     #[error("failed to parse nostr keys: {0}")]
@@ -45,6 +49,67 @@ pub enum ConfigError {
 
     #[error("config file error: {0}")]
     ConfigFile(String),
+}
+
+#[cfg(unix)]
+fn open_team_instructions(path: &Path) -> Result<File, std::io::Error> {
+    use std::os::unix::fs::OpenOptionsExt;
+
+    OpenOptions::new()
+        .read(true)
+        .custom_flags(nix::libc::O_NOFOLLOW | nix::libc::O_NONBLOCK)
+        .open(path)
+}
+
+#[cfg(not(unix))]
+fn open_team_instructions(path: &Path) -> Result<File, std::io::Error> {
+    // `O_NOFOLLOW` is not portable. Reject a link before opening on platforms
+    // where std does not expose an atomic no-follow open option, then validate
+    // the opened handle below as the authoritative file type.
+    if std::fs::symlink_metadata(path)?.file_type().is_symlink() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "team instructions path must not be a symlink",
+        ));
+    }
+    OpenOptions::new().read(true).open(path)
+}
+
+fn read_team_instructions(path: &Path) -> Result<String, ConfigError> {
+    let file = open_team_instructions(path)?;
+    let metadata = file.metadata()?;
+    if !metadata.is_file() {
+        return Err(ConfigError::ConfigFile(format!(
+            "team instructions path {} must be a regular file",
+            path.display()
+        )));
+    }
+    if metadata.len() > MAX_TEAM_INSTRUCTIONS_BYTES {
+        return Err(ConfigError::ConfigFile(format!(
+            "team instructions file {} exceeds 1 MB limit ({} bytes)",
+            path.display(),
+            metadata.len()
+        )));
+    }
+
+    let mut content = String::new();
+    file.take(MAX_TEAM_INSTRUCTIONS_BYTES + 1)
+        .read_to_string(&mut content)?;
+    if content.len() as u64 > MAX_TEAM_INSTRUCTIONS_BYTES {
+        return Err(ConfigError::ConfigFile(format!(
+            "team instructions file {} exceeds 1 MB limit ({}+ bytes)",
+            path.display(),
+            MAX_TEAM_INSTRUCTIONS_BYTES
+        )));
+    }
+    if content.trim().is_empty() {
+        return Err(ConfigError::ConfigFile(format!(
+            "team instructions file {} must not be empty",
+            path.display()
+        )));
+    }
+
+    Ok(content)
 }
 
 #[derive(Debug, Clone, PartialEq, clap::ValueEnum)]
@@ -860,15 +925,7 @@ impl Config {
         let team_instructions = if let Some(text) = args.team_instructions {
             Some(text)
         } else if let Some(ref path) = args.team_instructions_file {
-            let content = std::fs::read_to_string(path)?;
-            if content.len() > 1_048_576 {
-                return Err(ConfigError::ConfigFile(format!(
-                    "team instructions file {} exceeds 1 MB limit ({} bytes)",
-                    path.display(),
-                    content.len()
-                )));
-            }
-            Some(content)
+            Some(read_team_instructions(path)?)
         } else {
             None
         };
@@ -1431,6 +1488,16 @@ mod tests {
     use super::*;
     use crate::filter::{ChannelScope, SubscriptionRule};
     use clap::{Parser, ValueEnum};
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    fn temporary_test_path(label: &str) -> PathBuf {
+        static NEXT_PATH: AtomicU64 = AtomicU64::new(0);
+        std::env::temp_dir().join(format!(
+            "buzz-acp-{label}-{}-{}",
+            std::process::id(),
+            NEXT_PATH.fetch_add(1, Ordering::Relaxed)
+        ))
+    }
 
     /// Build a minimal Config for testing without CLI parsing.
     fn test_config(mode: SubscribeMode) -> Config {
@@ -2689,8 +2756,7 @@ channels = "ALL"
 
     #[test]
     fn team_instructions_file_full_path_loads_and_trims() {
-        let path =
-            std::env::temp_dir().join(format!("buzz-acp-team-instructions-{}", std::process::id()));
+        let path = temporary_test_path("team-instructions");
         std::fs::write(&path, "\n  shared operating policy  \n")
             .expect("write temporary team instructions");
 
@@ -2709,6 +2775,68 @@ channels = "ALL"
             Some("shared operating policy")
         );
         std::fs::remove_file(path).expect("remove temporary team instructions");
+    }
+
+    #[test]
+    fn team_instructions_file_rejects_whitespace_only_content() {
+        let path = temporary_test_path("empty-team-instructions");
+        std::fs::write(&path, " \n\t ").expect("write empty team instructions");
+
+        let args = CliArgs::try_parse_from([
+            "buzz-acp",
+            "--private-key",
+            TEST_PRIVATE_KEY,
+            "--team-instructions-file",
+            path.to_str().expect("temporary path should be UTF-8"),
+        ])
+        .expect("clap should parse args");
+        let error = Config::from_args(args).expect_err("empty policy must fail closed");
+
+        assert!(error.to_string().contains("must not be empty"));
+        std::fs::remove_file(path).expect("remove temporary team instructions");
+    }
+
+    #[test]
+    fn team_instructions_file_rejects_non_regular_source() {
+        let path = temporary_test_path("team-instructions-directory");
+        std::fs::create_dir(&path).expect("create temporary directory");
+
+        let args = CliArgs::try_parse_from([
+            "buzz-acp",
+            "--private-key",
+            TEST_PRIVATE_KEY,
+            "--team-instructions-file",
+            path.to_str().expect("temporary path should be UTF-8"),
+        ])
+        .expect("clap should parse args");
+        let error = Config::from_args(args).expect_err("directory must fail closed");
+
+        assert!(error.to_string().contains("must be a regular file"));
+        std::fs::remove_dir(path).expect("remove temporary directory");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn team_instructions_file_rejects_symlink() {
+        use std::os::unix::fs::symlink;
+
+        let target = temporary_test_path("team-instructions-target");
+        let link = temporary_test_path("team-instructions-link");
+        std::fs::write(&target, "shared operating policy").expect("write symlink target");
+        symlink(&target, &link).expect("create team instructions symlink");
+
+        let args = CliArgs::try_parse_from([
+            "buzz-acp",
+            "--private-key",
+            TEST_PRIVATE_KEY,
+            "--team-instructions-file",
+            link.to_str().expect("temporary path should be UTF-8"),
+        ])
+        .expect("clap should parse args");
+
+        assert!(Config::from_args(args).is_err(), "symlink must fail closed");
+        std::fs::remove_file(link).expect("remove temporary symlink");
+        std::fs::remove_file(target).expect("remove temporary target");
     }
 
     #[test]
